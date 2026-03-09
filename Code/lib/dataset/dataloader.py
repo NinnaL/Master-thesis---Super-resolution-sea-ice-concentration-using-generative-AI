@@ -1,12 +1,10 @@
-import torch
 import os
 import glob
 import xarray as xr
+import rioxarray
 import re
 from datetime import datetime
 from collections import defaultdict
-
-datadir = '/dmidata/projects/...'
 
 class SICDataLoader:
     def __init__(self, data_dirs, batch_size=32, shuffle=True, date_pattern=r'\d{8}[Tt]\d{6}', year=None):
@@ -37,7 +35,10 @@ class SICDataLoader:
         self.date_groups = defaultdict(lambda: {'amsr2': [], 'sic': []})
         
         for data_dir in data_dirs:
-            file_paths = glob.glob(os.path.join(data_dir, '*.nc'))
+            if 'AMSR2' in data_dir:
+                file_paths = glob.glob(os.path.join(data_dir, f'{self.year}/**/', '*.nc'), recursive=True)
+            else:
+                file_paths = glob.glob(os.path.join(data_dir, f'{self.year}/**/', '*_SIC.tiff'), recursive=True)
             for file_path in file_paths:
                 date_str = self._extract_date(file_path)
                 file_type = self._get_file_type(file_path)
@@ -120,6 +121,8 @@ class SICDataLoader:
     def _load_amsr2_frequencies(self, file_path):
         """Load AMSR2 file with multiple frequencies."""
         ds = xr.open_dataset(file_path)
+        print('AMSR2')
+        print(ds)
         
         # Extract coordinates
         lat = None
@@ -150,27 +153,24 @@ class SICDataLoader:
         }
     
     def _load_sic_ground_truth(self, file_path):
-        """Load SIC ground truth file."""
-        ds = xr.open_dataset(file_path)
-        
-        # Extract coordinates
-        lat = None
-        lon = None
-        
-        for lat_name in ['lat', 'latitude', 'y', 'lat_bnds']:
-            if lat_name in ds.variables:
-                lat = ds[lat_name].values
-                break
-        
-        for lon_name in ['lon', 'longitude', 'x', 'lon_bnds']:
-            if lon_name in ds.variables:
-                lon = ds[lon_name].values
-                break
-        
-        # Extract ground truth data
-        ground_truth = {}
-        for var_name in ds.data_vars:
-            ground_truth[var_name] = ds[var_name].values
+        """Load SIC ground truth file (.tiff or .nc)."""
+        # Check if file is a TIFF file
+        if file_path.lower().endswith(('.tiff', '.tif')):
+            ds = rioxarray.open_rasterio(file_path)
+            print('SIC')
+            print(ds)
+            
+            # Get coordinates from raster
+            lat = ds.y.values if 'y' in ds.coords else None
+            lon = ds.x.values if 'x' in ds.coords else None
+            
+            # Extract ground truth data (all bands)
+            ground_truth = {}
+            if len(ds.shape) == 3:  # (band, y, x)
+                for i in range(ds.shape[0]):
+                    ground_truth[f'band_{i+1}'] = ds.values[i, :, :]
+            else:  # (y, x)
+                ground_truth['data'] = ds.values
         
         return {
             'lat': lat,

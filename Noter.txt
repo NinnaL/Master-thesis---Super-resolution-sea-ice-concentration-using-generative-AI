@@ -1,0 +1,9 @@
+Dataloader, der gennemgår alle filer, notere hvor, hvornår på året og hvad de indeholder
+
+- sample fra det for at få et jævnt fordelt datasæt, med område, tid og mængde af is
+
+
+-> Dataloader for netværk
+-> Simpelt U-net med data infusion i (Baseline)
+
+
