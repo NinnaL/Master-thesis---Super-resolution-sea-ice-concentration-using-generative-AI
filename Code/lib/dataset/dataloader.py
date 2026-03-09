@@ -46,7 +46,7 @@ class SICDataLoader:
                 if date_str and file_type and self._matches_year(date_str):
                     self.date_groups[date_str][file_type].append(file_path)
         
-        # Create list of matched pairs (only dates with both AMSR2 and S1B)
+        # Create list of matched pairs (only dates with both AMSR2 and S1)
         self.matched_pairs = []
         for date_str, files in self.date_groups.items():
             if files['amsr2'] and files['sic']:
@@ -121,8 +121,6 @@ class SICDataLoader:
     def _load_amsr2_frequencies(self, file_path):
         """Load AMSR2 file with multiple frequencies."""
         ds = xr.open_dataset(file_path)
-        print('AMSR2')
-        print(ds)
         
         # Extract coordinates
         lat = None
@@ -140,6 +138,7 @@ class SICDataLoader:
         
         # Extract all frequency channels
         frequencies = {}
+
         for var_name in ds.data_vars:
             frequencies[var_name] = ds[var_name].values
         
