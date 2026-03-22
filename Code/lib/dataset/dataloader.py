@@ -42,7 +42,7 @@ class SICDataLoader:
     def _load_files(self):
         """Load files from specified directories."""
         for data_dir in self.data_dirs:
-            file_paths = glob.glob(os.path.join(data_dir, '*.nc' if 'AMSR2' in data_dir else '*_SIC.tiff'))
+            file_paths = glob.glob(os.path.join(data_dir, f'{self.year}/*/*.nc' if 'AMSR2' in data_dir else f'{self.year}/*/*_SIC.tiff'))
             for file_path in file_paths:
                 date_str = self._extract_date(file_path)
                 if date_str and self._matches_year(date_str):
