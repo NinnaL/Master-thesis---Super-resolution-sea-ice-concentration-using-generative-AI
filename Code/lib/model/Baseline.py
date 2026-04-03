@@ -2,12 +2,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class EncDec(nn.Module):
-    def __init__(self, return_features=False):
+    def __init__(self, in_channels, return_features=False):
         super(EncDec, self).__init__()
         self.return_features = return_features
         self.encoder = nn.Sequential(
             # encoder (downsampling)
-            nn.Conv2d(3, 64, 3, padding=1),
+            nn.Conv2d(in_channels, 64, 3, padding=1),
             nn.ReLU(),
             nn.MaxPool2d(2, 2),  # 128 -> 64
             nn.Conv2d(64, 64, 3, padding=1),
@@ -29,16 +29,16 @@ class EncDec(nn.Module):
 
         self.decoder = nn.Sequential(
             # decoder (upsampling)
-            nn.Upsample(16),  # 8 -> 16
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),  # 8 -> 16
             nn.Conv2d(64, 64, 3, padding=1),
             nn.ReLU(),
-            nn.Upsample(32),  # 16 -> 32
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),  # 16 -> 32
             nn.Conv2d(64, 64, 3, padding=1),
             nn.ReLU(),
-            nn.Upsample(64),  # 32 -> 64
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),  # 32 -> 64
             nn.Conv2d(64, 64, 3, padding=1),
             nn.ReLU(),
-            nn.Upsample(128),  # 64 -> 128
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),  # 64 -> 128
             nn.Conv2d(64, 1, 3, padding=1)
         )
 
