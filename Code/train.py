@@ -198,8 +198,18 @@ for epoch in range(1, NUM_EPOCHS + 1):
             "val_loss": val_loss,
             "val_rmse": val_rmse,
             "val_mae": val_mae,
+            # model config
             "in_channels": AMSR2_IN_CHANNELS,  # saved for safe reloading
             "features": FEATURES,
+            # training config — for reproducibility and logging
+            'num_epochs':           NUM_EPOCHS,
+            'batch_size':           BATCH_SIZE,
+            'learning_rate':        LEARNING_RATE,
+            'weight_decay':         WEIGHT_DECAY,
+            'grad_clip_norm':       GRAD_CLIP_NORM,
+            'seed':                 SEED,
+            'cache_dir':            CACHE_DIR,
+            'collate':              'pad_to_max',
         }, best_ckpt_path)
         print(f"         ↳ saved best model (val_loss={val_loss:.4f})")
  
