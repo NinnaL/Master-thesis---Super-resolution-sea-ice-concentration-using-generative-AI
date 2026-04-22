@@ -44,13 +44,12 @@ print(f"Using device: {device}")
 train_dataset = AMSR2Dataset(CACHE_DIR, split='train')
 val_dataset   = AMSR2Dataset(CACHE_DIR, split='val')
 
-# # For testing
-# train_dataset = Subset(train_dataset, range(10000))
-# val_dataset   = Subset(val_dataset,   range(2000))
+# For testing
+train_dataset = Subset(train_dataset, range(1000))
+val_dataset   = Subset(val_dataset,   range(200))
 
 ### Collate ###
 # Pad to max
-### Crop to min
 train_loader = DataLoader(
     train_dataset, batch_size=BATCH_SIZE, shuffle=True,
     num_workers=NUM_WORKERS, pin_memory=torch.cuda.is_available(),
@@ -94,7 +93,6 @@ with open(summary_path, 'w') as f:
     summary(model.features, input_size=(AMSR2_IN_CHANNELS, 199, 212), device=str(device))
     sys.stdout = sys.__stdout__
  
-print(f"Model summary saved → {summary_path}")
 
 ### Metricss ### (Masked for only applying loss to valid pixels)
 def masked_rmse(pred, target, mask):
@@ -172,7 +170,7 @@ history = {'train_loss': [], 'val_loss': [], 'val_rmse': [], 'val_mae': []}
 best_val_loss = float('inf')
 best_ckpt_path = os.path.join(OUTPUT_DIR, f'best_baseline_model_{postfix}.pth')
 
-print("Starting training...")
+print("\nStarting training...")
 print(f"\n{'Epoch':>6} {'Train Loss':>12} {'Val Loss':>10} {'Val RMSE':>10} {'Val MAE':>10} {'Time':>8}")
 
 for epoch in range(1, NUM_EPOCHS + 1):
