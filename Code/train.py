@@ -20,17 +20,17 @@ OUTPUT_DIR = "/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ic
 
 ### Parameters ###
 NUM_EPOCHS = 50
-BATCH_SIZE = 16
-LEARNING_RATE = 1e-4
+BATCH_SIZE = 32
+LEARNING_RATE = 1e-4 
 WEIGHT_DECAY = 1e-5
-NUM_WORKERS = 16
+NUM_WORKERS = 4
 SEED = 42
-FEATURES = 64
+FEATURES = 32
 
 AMSR2_IN_CHANNELS = 14 # The two 89.9 CHz channels for the baseline model
 GRAD_CLIP_NORM    = 1.0
 
-postfix = '2'
+postfix = '1'
 
 ### Setup ###
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -52,14 +52,30 @@ val_dataset   = Subset(val_dataset,   range(200))
 # Pad to max
 train_loader = DataLoader(
     train_dataset, batch_size=BATCH_SIZE, shuffle=True,
-    num_workers=NUM_WORKERS, pin_memory=torch.cuda.is_available(),
-    prefetch_factor=4, collate_fn=collate_pad_to_max,
+    num_workers=NUM_WORKERS, pin_memory=False,
+    persistent_workers=True,
+    collate_fn=collate_pad_to_max,
 )
 val_loader = DataLoader(
     val_dataset, batch_size=BATCH_SIZE, shuffle=False,
-    num_workers=NUM_WORKERS, pin_memory=torch.cuda.is_available(),
-    prefetch_factor=4, collate_fn=collate_pad_to_max,
+    num_workers=NUM_WORKERS, pin_memory=False,
+    persistent_workers=True,
+    collate_fn=collate_pad_to_max,
 )
+
+### DataLoader timing test ###
+print("Timing DataLoader...")
+import time
+
+t0 = time.time()
+for i, (amsr2, sic, mask) in enumerate(train_loader):
+    if i == 0:
+        print(f"  First batch: {time.time()-t0:.2f}s  shapes: amsr2={tuple(amsr2.shape)}  sic={tuple(sic.shape)}")
+    if i >= 9:
+        break
+t_total = time.time() - t0
+print(f"  10 batches: {t_total:.2f}s  ({t_total/10:.2f}s per batch)")
+print(f"  Estimated epoch time: {t_total/10 * len(train_loader):.1f}s  ({len(train_loader)} batches)")
 # # Crop to min
 # train_loader = DataLoader(
 #     train_dataset, batch_size=BATCH_SIZE, shuffle=True,

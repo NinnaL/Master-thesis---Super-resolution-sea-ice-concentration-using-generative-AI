@@ -131,7 +131,7 @@ if __name__ == '__main__':
 
     channel_names = get_channel_names(file_list.iloc[0]['amsr2_path'])
 
-    write_split(train_files, 'train', CACHE_DIR, channel_names)
+    # write_split(train_files, 'train', CACHE_DIR, channel_names)
     write_split(val_files,   'val',   CACHE_DIR, channel_names)
 
     print(f'Done → {CACHE_DIR}/train  and  {CACHE_DIR}/val')
