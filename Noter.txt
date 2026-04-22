@@ -1,9 +1,8 @@
-Dataloader, der gennemgår alle filer, notere hvor, hvornår på året og hvad de indeholder
+criterion = MSELoss?? Should be L2 (or L1 - a bit more noisy, but more precise)
 
-- sample fra det for at få et jævnt fordelt datasæt, med område, tid og mængde af is
+Write fancy Model
 
-
--> Dataloader for netværk
--> Simpelt U-net med data infusion i (Baseline)
+Train simple model on bigger dataset
+- Make nan proof using claudes suggestion
 
 

@@ -1,53 +1,37 @@
 import torch.nn as nn
 import torch.nn.functional as F
 
+
+# SRCNN architecture adapted
 class EncDec(nn.Module):
-    def __init__(self, in_channels, return_features=False):
+    def __init__(self, in_channels, features=64):
         super(EncDec, self).__init__()
-        self.return_features = return_features
-        self.encoder = nn.Sequential(
-            # encoder (downsampling)
-            nn.Conv2d(in_channels, 64, 3, padding=1),
+
+        self.features = nn.Sequential(
+            # feature extraction without downsampling
+            nn.Conv2d(in_channels, features, 9, padding=4),
             nn.ReLU(),
-            nn.MaxPool2d(2, 2),  # 128 -> 64
-            nn.Conv2d(64, 64, 3, padding=1),
+            nn.Conv2d(features, features, 3, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(2, 2),  # 64 -> 32
-            nn.Conv2d(64, 64, 3, padding=1),
+            nn.Conv2d(features, features, 3, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(2, 2),  # 32 -> 16
-            nn.Conv2d(64, 64, 3, padding=1),
+            nn.Conv2d(features, features, 3, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(2, 2)  # 16 -> 8
-        )
-    
-        # bottleneck
-        self.bottleneck_conv = nn.Sequential(
-            nn.Conv2d(64, 64, 3, padding=1),
-            nn.ReLU()
         )
 
-        self.decoder = nn.Sequential(
-            # decoder (upsampling)
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),  # 8 -> 16
-            nn.Conv2d(64, 64, 3, padding=1),
+        self.upsample = nn.Sequential(
+            # upsampling
+            nn.Conv2d(features, features*25, 3, padding=1), # 5x
+            nn.PixelShuffle(5),                             # (B, features*25, H, W) -> (B, features, 5H, 5W)
             nn.ReLU(),
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),  # 16 -> 32
-            nn.Conv2d(64, 64, 3, padding=1),
+            nn.Conv2d(features, features*25, 3, padding=1), # 5x
+            nn.PixelShuffle(5),                             # (B, features*25, 5H, 5W) -> (B, features, 25H, 25W)
             nn.ReLU(),
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),  # 32 -> 64
-            nn.Conv2d(64, 64, 3, padding=1),
-            nn.ReLU(),
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),  # 64 -> 128
-            nn.Conv2d(64, 1, 3, padding=1)
+            nn.Conv2d(features, 1, 3, padding=1)
         )
 
-    def forward(self, x, return_features=False):
-        x_enc = self.encoder(x)
-        x_bottleneck = self.bottleneck_conv(x_enc)
-        x_dec = self.decoder(x_bottleneck)
+    def forward(self, x):
 
-        if return_features:
-            return x_bottleneck
-            
-        return x_dec
+        out = self.upsample(self.features(x))    # (B, 1, H*25, W*25)
+
+        return out

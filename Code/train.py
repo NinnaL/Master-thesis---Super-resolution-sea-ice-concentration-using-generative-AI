@@ -1,35 +1,36 @@
 import os
+import sys
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+import time
 import numpy as np
-import pandas as pd
-import xarray as xr
-import rioxarray
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
-from sklearn.model_selection import train_test_split
-from rasterio.enums import Resampling
+from torch.utils.data import DataLoader, Subset
+from torchsummary import summary
 import matplotlib.pyplot as plt
-
-from lib.dataset.dataloader2 import AMSR2Dataset
+ 
+from lib.dataset.dataloader import AMSR2Dataset, collate_crop_to_min, collate_pad_to_max
 from lib.model.Baseline import EncDec
 
+
 ### Configurations ###
-DATA_DIRS = ['/dmidata/projects/asip-cms/tests/new_input_ncs/AMSR2', '/dmidata/projects/asip-cms/reproc']
-TRAINING_INDEX_CSV = "/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/training_index2.csv"
+CACHE_DIR  = '/dmidata/projects/asip-cms/ninna_msc/zarr_cache'
 OUTPUT_DIR = "/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/outputs/training/baseline"
 
-TARGET_SIZE = (192, 192)
-
 ### Parameters ###
-NUM_EPOCHS = 1
-BATCH_SIZE = 8
+NUM_EPOCHS = 50
+BATCH_SIZE = 16
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 1e-5
-NUM_WORKERS = 4
+NUM_WORKERS = 16
 SEED = 42
+FEATURES = 64
 
-AMSR2_IN_CHANNELS = 14
+AMSR2_IN_CHANNELS = 14 # The two 89.9 CHz channels for the baseline model
+GRAD_CLIP_NORM    = 1.0
+
+postfix = '2'
 
 ### Setup ###
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -40,22 +41,64 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 
 ### Dataset and DataLoader ###
-train_dataset = AMSR2Dataset(DATA_DIRS, TRAINING_INDEX_CSV, split='train', target_size=TARGET_SIZE, seed=SEED)
-val_dataset   = AMSR2Dataset(DATA_DIRS, TRAINING_INDEX_CSV, split='val', target_size=TARGET_SIZE, seed=SEED)
+train_dataset = AMSR2Dataset(CACHE_DIR, split='train')
+val_dataset   = AMSR2Dataset(CACHE_DIR, split='val')
 
-train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,  num_workers=NUM_WORKERS, pin_memory=True)
-val_loader   = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True)
+# # For testing
+# train_dataset = Subset(train_dataset, range(10000))
+# val_dataset   = Subset(val_dataset,   range(2000))
+
+### Collate ###
+# Pad to max
+### Crop to min
+train_loader = DataLoader(
+    train_dataset, batch_size=BATCH_SIZE, shuffle=True,
+    num_workers=NUM_WORKERS, pin_memory=torch.cuda.is_available(),
+    prefetch_factor=4, collate_fn=collate_pad_to_max,
+)
+val_loader = DataLoader(
+    val_dataset, batch_size=BATCH_SIZE, shuffle=False,
+    num_workers=NUM_WORKERS, pin_memory=torch.cuda.is_available(),
+    prefetch_factor=4, collate_fn=collate_pad_to_max,
+)
+# # Crop to min
+# train_loader = DataLoader(
+#     train_dataset, batch_size=BATCH_SIZE, shuffle=True,
+#     num_workers=NUM_WORKERS, pin_memory=torch.cuda.is_available(),
+#     prefetch_factor=4, collate_fn=collate_crop_to_min,
+# )
+# val_loader = DataLoader(
+#     val_dataset, batch_size=BATCH_SIZE, shuffle=False,
+#     num_workers=NUM_WORKERS, pin_memory=torch.cuda.is_available(),
+#     prefetch_factor=4, collate_fn=collate_crop_to_min,
+# )
 
 ### Model, loss, optimizer ###
-model = EncDec(in_channels=AMSR2_IN_CHANNELS).to(device)
-criterion = nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+model = EncDec(in_channels=AMSR2_IN_CHANNELS, features=FEATURES).to(device)
+criterion = nn.MSELoss() # L2
+# criterion_mae = nn.L1Loss() # MAE for more robustness towards outliers
+optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
-### Loss masks ### (For only applying loss to valid pixels)
+### Save model summary ###
+summary_path = os.path.join(OUTPUT_DIR, f'model_summary_{postfix}.txt')
+ 
+class _Tee:
+    def __init__(self, f): self._f = f
+    def write(self, s): sys.__stdout__.write(s); self._f.write(s)
+    def flush(self): sys.__stdout__.flush(); self._f.flush()
+ 
+with open(summary_path, 'w') as f:
+    f.write(f"Samples  : train={len(train_dataset)}  val={len(val_dataset)}\n")
+    f.write(f"Model    : EncDec_simple  |  in_channels={AMSR2_IN_CHANNELS}  |  features={FEATURES}\n\n")
+    sys.stdout = _Tee(f)
+    summary(model.features, input_size=(AMSR2_IN_CHANNELS, 199, 212), device=str(device))
+    sys.stdout = sys.__stdout__
+ 
+print(f"Model summary saved → {summary_path}")
+
+### Metricss ### (Masked for only applying loss to valid pixels)
 def masked_rmse(pred, target, mask):
-	valid_pred = pred[~mask]
-	valid_target = target[~mask]
-	return torch.sqrt(torch.mean((valid_pred - valid_target)**2)).item()
+	return torch.sqrt(torch.mean((pred[~mask] - target[~mask])**2)).item()
 
 def masked_mae(pred, target, mask):
     return torch.mean(torch.abs(pred[~mask] - target[~mask])).item()
@@ -64,17 +107,45 @@ def masked_mae(pred, target, mask):
 def train_epoch(model, dataloader, criterion, optimizer, device):
     model.train()
     total_loss = 0.0
+    skipped = 0
+    t_load, t_forward, t_backward = 0.0, 0.0, 0.0
 	
     for amsr2, sic, mask in dataloader:
+        t0 = time.time()
         amsr2, sic, mask = amsr2.to(device), sic.to(device), mask.to(device)
-        optimizer.zero_grad() 
-        pred = model(amsr2)
-        loss = criterion(pred[~mask], sic[~mask])  # Only compute loss on valid pixels
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item()
-    return total_loss / len(dataloader)
+        t_load += time.time() - t0
 
+        target_size = (sic.shape[-2], sic.shape[-1])
+        valid = ~mask
+        if not valid.any():
+            continue
+
+        t0 = time.time()
+        optimizer.zero_grad() 
+        pred = model(amsr2, target_size=target_size)
+        loss = criterion(pred[valid], sic[valid])  # Only compute loss on valid pixels
+        t_forward += time.time() - t0
+
+        # NaN guard - if loss is non-finite skip this batch to avoid corrupting training with bad gradients
+        if not torch.isfinite(loss):
+            skipped += 1
+            optimizer.zero_grad()  # clear any gradients just in case
+            continue
+
+        t0 = time.time()
+        loss.backward()
+        # Gradient clipping - caps gradient norm before the optimizer step
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_NORM)
+        optimizer.step()
+        t_backward += time.time() - t0
+
+        total_loss += loss.item()
+
+    n = len(dataloader)
+    if skipped:
+        print(f"  Warning: {skipped} batches skipped due to non-finite loss")
+    print(f"  load={t_load/n:.2f}s  forward={t_forward/n:.2f}s  backward={t_backward/n:.2f}s  per batch")
+    return total_loss / n
 
 @torch.no_grad()
 def validate_epoch(model, dataloader, criterion, device):
@@ -83,50 +154,60 @@ def validate_epoch(model, dataloader, criterion, device):
 
     for amsr2, sic, mask in dataloader:
         amsr2, sic, mask = amsr2.to(device), sic.to(device), mask.to(device)
-        pred = model(amsr2)
-        total_loss += criterion(pred[~mask], sic[~mask]).item()  # Only compute loss on valid pixels
+        target_size = (sic.shape[-2], sic.shape[-1])
+        valid = ~mask
+        if not valid.any():
+            continue
+
+        pred = model(amsr2, target_size=target_size)
+        total_loss += criterion(pred[valid], sic[valid]).item()  # Only compute loss on valid pixels
         total_rmse += masked_rmse(pred, sic, mask)
         total_mae += masked_mae(pred, sic, mask)
-    return total_loss / len(dataloader), total_rmse / len(dataloader), total_mae / len(dataloader)
+    
+    n = len(dataloader)
+    return total_loss / n, total_rmse / n, total_mae / n
 
 ### Training loop ###
 history = {'train_loss': [], 'val_loss': [], 'val_rmse': [], 'val_mae': []}
 best_val_loss = float('inf')
-best_ckpt_path = os.path.join(OUTPUT_DIR, 'best_baseline_model.pth')
+best_ckpt_path = os.path.join(OUTPUT_DIR, f'best_baseline_model_{postfix}.pth')
 
 print("Starting training...")
-print(f"\n{'Epoch':>6} {'Train Loss':>12} {'Val Loss':>10} {'Val RMSE':>10} {'Val MAE':>10}")
+print(f"\n{'Epoch':>6} {'Train Loss':>12} {'Val Loss':>10} {'Val RMSE':>10} {'Val MAE':>10} {'Time':>8}")
 
 for epoch in range(1, NUM_EPOCHS + 1):
-	train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
-	val_loss, val_rmse, val_mae = validate_epoch(model, val_loader, criterion, device)
+    start_time = time.time()
+    train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
+    val_loss, val_rmse, val_mae = validate_epoch(model, val_loader, criterion, device)
+    epoch_time = time.time() - start_time
 
-	history['train_loss'].append(train_loss)
-	history['val_loss'].append(val_loss)
-	history['val_rmse'].append(val_rmse)
-	history['val_mae'].append(val_mae)
+    history['train_loss'].append(train_loss)
+    history['val_loss'].append(val_loss)
+    history['val_rmse'].append(val_rmse)
+    history['val_mae'].append(val_mae)
 
-	print(f"{epoch:>6} {train_loss:>12.4f} {val_loss:>10.4f} {val_rmse:>10.4f} {val_mae:>10.4f}")
+    print(f"{epoch:>6} {train_loss:>12.4f} {val_loss:>10.4f} {val_rmse:>10.4f} {val_mae:>10.4f} {epoch_time:>8.4f}")
 
-	# Save best model checkpoint
-	if val_loss < best_val_loss:
-		best_val_loss = val_loss
-		torch.save({
-            "epoch":                epoch,
-            "model_state_dict":     model.state_dict(),
+    # Save best model checkpoint
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        torch.save({
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
-            "val_loss":             val_loss,
-            "val_rmse":             val_rmse,
-            "val_mae":              val_mae,
-            "in_channels":          AMSR2_IN_CHANNELS,  # saved for safe reloading
+            "val_loss": val_loss,
+            "val_rmse": val_rmse,
+            "val_mae": val_mae,
+            "in_channels": AMSR2_IN_CHANNELS,  # saved for safe reloading
+            "features": FEATURES,
         }, best_ckpt_path)
-		print(f"         ↳ saved best model (val_loss={val_loss:.4f})")
+        print(f"         ↳ saved best model (val_loss={val_loss:.4f})")
  
 print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
 
 ### Saving ###
 # Saving history as a numpy file for easy loading and plotting later
-history_path = os.path.join(OUTPUT_DIR, 'training_history.npy')
+history_path = os.path.join(OUTPUT_DIR, f'training_history_{postfix}.npy')
 np.save(history_path, history)
 print(f"Training history saved to {history_path}")
 
@@ -151,40 +232,41 @@ pred_np_masked = np.where(mask_np, np.nan, pred_np)
 target_np_masked = np.where(mask_np, np.nan, target_np)
 
 # Save .npy file
-npy_path = os.path.join(OUTPUT_DIR, 'sample_prediction.npz')
-np.save(npy_path, {'prediction': pred_np_masked, 'target': target_np_masked, 'mask': mask_np})
+npy_path = os.path.join(OUTPUT_DIR, f'sample_prediction_{postfix}.npz')
+np.savez(npy_path, prediction=pred_np_masked, target=target_np_masked, mask=mask_np)
 print(f"Sample prediction saved to {npy_path}")
 
 # Save .png visualization
 fig, axes = plt.subplots(1, 3, figsize=(14, 4))
 vmin, vmax = 0, 100
 
-im0 = axes[0].imshow(target_np_masked, vmin=vmin, vmax=vmax, cmap='Blues')
+im0 = axes[0].imshow(target_np_masked, vmin=vmin, vmax=vmax, cmap='Blues_r')
 axes[0].set_title('Target SIC')
 axes[0].axis('off')
 plt.colorbar(im0, ax=axes[0], fraction=0.046, label='SIC (%)')
 
-im1 = axes[1].imshow(pred_np_masked, vmin=vmin, vmax=vmax, cmap='Blues')
+im1 = axes[1].imshow(pred_np_masked, vmin=vmin, vmax=vmax, cmap='Blues_r')
 axes[1].set_title('Predicted SIC')
 axes[1].axis('off')
 plt.colorbar(im1, ax=axes[1], fraction=0.046, label='SIC (%)')
 
 diff = pred_np_masked - target_np_masked
 abs_max = np.nanmax(np.abs(diff))
-im2 = axes[2].imshow(diff, vmin=-abs_max, vmax=abs_max, cmap='RdBu_r')
+im2 = axes[2].imshow(diff, vmin=-abs_max, vmax=abs_max, cmap='bwr')
 axes[2].set_title('Prediction Error')
 axes[2].axis('off')
 plt.colorbar(im2, ax=axes[2], fraction=0.046, label='Error (%)')
 
 plt.suptitle('Sample Prediction vs Target (Masked) - best baseline model')
 plt.tight_layout()
-png_path = os.path.join(OUTPUT_DIR, 'sample_prediction.png')
+png_path = os.path.join(OUTPUT_DIR, f'sample_prediction_{postfix}.png')
 plt.savefig(png_path, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"Sample prediction figure saved to {png_path}")
 
 # Save training curves
-epochs = range(1, NUM_EPOCHS + 1)
+history = np.load(history_path, allow_pickle=True).item() # load history dict
+epochs = range(1, len(history['train_loss']) + 1)
 fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
 axes[0].plot(epochs, history['train_loss'], label='Train')
@@ -194,12 +276,12 @@ axes[0].set_xlabel('Epoch')
 axes[0].legend()
 axes[0].grid(True, alpha=0.3)
 
-axes[1].plot(epochs, history['val_rmse'], color='tab_orange')
+axes[1].plot(epochs, history['val_rmse'], color='darkorange')
 axes[1].set_title('Val RMSE')
 axes[1].set_xlabel('Epoch')
 axes[1].grid(True, alpha=0.3)
 
-axes[2].plot(epochs, history['val_mae'], color='tab_green')
+axes[2].plot(epochs, history['val_mae'], color='green')
 axes[2].set_title('Val MAE')
 axes[2].set_xlabel('Epoch')
 axes[2].grid(True, alpha=0.3)

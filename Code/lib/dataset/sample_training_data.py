@@ -7,11 +7,11 @@ seed = 42
 mixed_ice_cols = ['0-10', '10-20', '20-30', '30-40', '40-50', '50-60', '60-70', '70-80', '80-90', '90-100']
 
 # min fraction of valid pixels in ice bins
-min_mixed_frac = 0.25 # at least 10% must be in ice bins
+min_mixed_frac = 0.5 # at least 10% must be in ice bins
 # max fraction of valid pixels of pure ice and open water
 max_pure_frac = 0.8 # at most 90% must be in pure ice and open water bins
 # number of samples to draw for training
-n_samples = 50000
+n_samples = 1000
 
 
 def load_stats(file_path):
@@ -116,7 +116,7 @@ def sample_training_data(input_path, output_path='Training_index.csv', n_samples
 if __name__ == '__main__':
     df = sample_training_data(
         input_path    = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/Data/meta/sic_amsr2_metadata_stats_all_years.csv',
-        output_path = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/training_index3.csv',
+        output_path = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/training_index_short.csv',
         n_samples   = n_samples,
         min_mixed   = min_mixed_frac,
         max_pure    = max_pure_frac,
