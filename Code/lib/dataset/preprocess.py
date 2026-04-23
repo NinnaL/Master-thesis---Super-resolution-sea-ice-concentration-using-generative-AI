@@ -112,6 +112,27 @@ def write_split(df_split, split_name, cache_dir, channel_names):
     ok = len(df_split) - len(done) - errors
     print(f'{split_name} done. Processed: {ok}, Skipped: {len(done)}, Errors: {errors}.')
 
+def reprocess_indices(indices, df_split, split_name, cache_dir, channel_names):
+    """Reprocess and overwrite specific indices in the zarr cache."""
+    split_dir = os.path.join(cache_dir, split_name)
+    store = zarr.DirectoryStore(split_dir)
+    root  = zarr.open_group(store, mode='a')
+    compressor = zarr.Blosc(cname='lz4', clevel=3)
+    errors = 0
+
+    for i in tqdm(indices, desc=f'reprocessing {split_name}'):
+        key = str(i)
+        row = df_split.iloc[i]
+        try:
+            amsr2, sic, mask = process_pair(row.amsr2_path, row.sic_path)
+            root.require_group('amsr2')[key] = zarr.array(amsr2, chunks=amsr2.shape, compressor=compressor)
+            root.require_group('sic')[key]   = zarr.array(sic,   chunks=sic.shape,   compressor=compressor)
+            root.require_group('mask')[key]  = zarr.array(mask,  chunks=mask.shape,  compressor=compressor)
+        except Exception as e:
+            print(f'Error at index {i}: {e}')
+            errors += 1
+
+    print(f'Done. Reprocessed: {len(indices)-errors}, Errors: {errors}.')
 
 if __name__ == '__main__':
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -131,7 +152,15 @@ if __name__ == '__main__':
 
     channel_names = get_channel_names(file_list.iloc[0]['amsr2_path'])
 
-    # write_split(train_files, 'train', CACHE_DIR, channel_names)
-    write_split(val_files,   'val',   CACHE_DIR, channel_names)
+    #  ── Process files ──────────────────────────────
+    # # write_split(train_files, 'train', CACHE_DIR, channel_names)
+    # write_split(val_files,   'val',   CACHE_DIR, channel_names)
 
-    print(f'Done → {CACHE_DIR}/train  and  {CACHE_DIR}/val')
+    # print(f'Done → {CACHE_DIR}/train  and  {CACHE_DIR}/val')
+
+    # ── Optional: reprocess specific bad indices ──────────────────────────────
+    # Uncomment and set bad_indices after running the dataset scan
+
+    bad_indices = [4591, 5135, 7841, 16063, 28045, 28885, 33777, 37406, 38530]  # e.g. [42, 137, 891]
+    if bad_indices:
+        reprocess_indices(bad_indices, train_files, 'train', CACHE_DIR, channel_names)

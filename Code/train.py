@@ -124,7 +124,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
     skipped = 0
     t_load, t_forward, t_backward = 0.0, 0.0, 0.0
 	
-    for amsr2, sic, mask in dataloader:
+    for batch_idx, (amsr2, sic, mask) in enumerate(dataloader):
         t0 = time.time()
         amsr2, sic, mask = amsr2.to(device), sic.to(device), mask.to(device)
         t_load += time.time() - t0
@@ -140,22 +140,31 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
         loss = criterion(pred[valid], sic[valid])  # Only compute loss on valid pixels
         t_forward += time.time() - t0
 
-        # NaN guard - if loss is non-finite skip this batch to avoid corrupting training with bad gradients
+        # NaN loss guard - if loss is non-finite skip this batch to avoid corrupting training with bad gradients
         if not torch.isfinite(loss):
             skipped += 1
             optimizer.zero_grad()  # clear any gradients just in case
+            print(f'  NaN loss at batch {batch_idx}')
             continue
 
         t0 = time.time()
         loss.backward()
         # Gradient clipping - caps gradient norm before the optimizer step
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_NORM)
+        total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_NORM)
+        
+        # NaN grad norm guard - if grad norm is non-finite skip optimizer step to avoid corrupting training with bad weights
+        if not torch.isfinite(total_norm):
+            skipped += 1
+            optimizer.zero_grad()  # clear any gradients just in case
+            print(f'  NaN grad norm at batch {batch_idx}')
+            continue
+        
         optimizer.step()
         t_backward += time.time() - t0
 
         total_loss += loss.item()
 
-    n = len(dataloader)
+    n = max(len(dataloader)-skipped, 1)  # avoid division by zero
     if skipped:
         print(f"  Warning: {skipped} batches skipped due to non-finite loss")
     print(f"  load={t_load/n:.2f}s  forward={t_forward/n:.2f}s  backward={t_backward/n:.2f}s  per batch")
@@ -164,6 +173,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
 @torch.no_grad()
 def validate_epoch(model, dataloader, criterion, device):
     model.eval()
+    n_processed = 0
     total_loss, total_rmse, total_mae = 0.0, 0.0, 0.0
 
     for amsr2, sic, mask in dataloader:
@@ -174,11 +184,16 @@ def validate_epoch(model, dataloader, criterion, device):
             continue
 
         pred = model(amsr2, target_size=target_size)
-        total_loss += criterion(pred[valid], sic[valid]).item()  # Only compute loss on valid pixels
+
+        batch_loss = criterion(pred[valid], sic[valid]).item()  # Only compute loss on valid pixels
+        if not np.isfinite(batch_loss):
+            continue
+        total_loss += batch_loss
         total_rmse += masked_rmse(pred, sic, mask)
         total_mae += masked_mae(pred, sic, mask)
-    
-    n = len(dataloader)
+        n_processed += 1
+        
+    n = max(n_processed, 1)  # avoid division by zero
     return total_loss / n, total_rmse / n, total_mae / n
 
 ### Training loop ###
@@ -312,7 +327,7 @@ axes[2].grid(True, alpha=0.3)
 
 plt.suptitle('Training History - Baseline Model')
 plt.tight_layout()
-history_png_path = os.path.join(OUTPUT_DIR, 'training_curves.png')
+history_png_path = os.path.join(OUTPUT_DIR, f'training_curves_{postfix}.png')
 plt.savefig(history_png_path, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"Training curves figure saved to {history_png_path}")
