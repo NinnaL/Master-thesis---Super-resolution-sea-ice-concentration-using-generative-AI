@@ -19,6 +19,16 @@ class EncDec(nn.Module):
             nn.Conv2d(features, 1, kernel_size=3, padding=1),
         )
 
+        self._init_weights()
+ 
+    def _init_weights(self):
+        # Initialize convolutional layers with Kaiming normal initialization, to prevent NaN losses during training
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
     def forward(self, x, target_size):
         # Normalise AMSR2 brightness temperatures to ~[-1, 2]
         x = (x - 150.0) / 50.0

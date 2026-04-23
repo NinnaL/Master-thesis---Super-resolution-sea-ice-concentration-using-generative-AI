@@ -45,8 +45,8 @@ train_dataset = AMSR2Dataset(CACHE_DIR, split='train')
 val_dataset   = AMSR2Dataset(CACHE_DIR, split='val')
 
 # For testing
-train_dataset = Subset(train_dataset, range(1000))
-val_dataset   = Subset(val_dataset,   range(200))
+# train_dataset = Subset(train_dataset, range(1000))
+# val_dataset   = Subset(val_dataset,   range(200))
 
 ### Collate ###
 # Pad to max
