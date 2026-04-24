@@ -18,6 +18,10 @@ VAL_SPLIT_RATIO = 0.2
 SEED = 42
 SCALE_FACTOR = 25
 
+MIXED_ICE_COLS = ['0-10', '10-20', '20-30', '30-40', '40-50',
+                  '50-60', '60-70', '70-80', '80-90', '90-100']
+BIN_COLS = ['val_0'] + MIXED_ICE_COLS + ['val_100']
+
 
 def build_filelist(csv_path, data_dirs):
     df = pd.read_csv(csv_path)
@@ -112,27 +116,158 @@ def write_split(df_split, split_name, cache_dir, channel_names):
     ok = len(df_split) - len(done) - errors
     print(f'{split_name} done. Processed: {ok}, Skipped: {len(done)}, Errors: {errors}.')
 
-def reprocess_indices(indices, df_split, split_name, cache_dir, channel_names):
-    """Reprocess and overwrite specific indices in the zarr cache."""
-    split_dir = os.path.join(cache_dir, split_name)
-    store = zarr.DirectoryStore(split_dir)
-    root  = zarr.open_group(store, mode='a')
-    compressor = zarr.Blosc(cname='lz4', clevel=3)
-    errors = 0
+def _compute_row_stats(row):
+    """Compute derived columns for a metadata row to match training index format."""
+    total = sum(row[c] for c in BIN_COLS)
+    if total == 0:
+        total = np.nan
+ 
+    frac_mixed      = sum(row[c] for c in MIXED_ICE_COLS) / total
+    frac_pure       = (row['val_0'] + row['val_100']) / total
+    frac_open_water = row['val_0'] / total
+    frac_ice100     = row['val_100'] / total
+ 
+    ice_class = pd.cut(
+        [frac_mixed], bins=[0, 0.3, 0.6, 1.01],
+        labels=['low_mix', 'mid_mix', 'high_mix']
+    )[0]
+ 
+    ts    = pd.to_datetime(str(row['timestamp']), format='%Y%m%dT%H%M%S', errors='coerce')
+    year  = ts.year  if pd.notna(ts) else np.nan
+    month = ts.month if pd.notna(ts) else np.nan
+ 
+    stratum = f'{str(int(month)).zfill(2)}_{ice_class}' if pd.notna(month) else np.nan
+ 
+    return {
+        'year':           year,
+        'month':          month,
+        'frac_mixed':     frac_mixed,
+        'frac_pure':      frac_pure,
+        'frac_open_water':frac_open_water,
+        'frac_ice100':    frac_ice100,
+        'ice_class':      ice_class,
+        'stratum':        stratum,
+        'split':          'train',
+    }
 
+def replace_bad_indices(bad_indices, csv_path, meta_path, data_dirs, cache_dir,
+                        split_name, val_ratio=VAL_SPLIT_RATIO, seed=SEED):
+    """
+    Replace bad samples in the zarr cache with new samples drawn from the
+    full metadata CSV, excluding files already in the training index.
+ 
+    For each bad index:
+      1. Samples a replacement row from the metadata not already in the CSV
+      2. Computes all derived columns to match the training index format
+      3. Processes the replacement file pair
+      4. Deletes the bad zarr arrays and writes the replacement
+      5. Updates the training index CSV with the replacement row
+    """
+    # Load training index
+    training_df = pd.read_csv(csv_path)
+ 
+    # Load metadata and exclude already-used files
+    meta_df    = pd.read_csv(meta_path, low_memory=False)
+    meta_df.columns = meta_df.columns.str.strip()
+    meta_df    = meta_df[meta_df['error'].isna()].copy()   # remove corrupt rows
+ 
+    used_amsr2 = set(training_df['amsr2_file'])
+    used_sic   = set(training_df['sic_file'])
+    candidates = meta_df[
+        ~meta_df['amsr2_file'].isin(used_amsr2) &
+        ~meta_df['sic_file'].isin(used_sic)
+    ].sample(frac=1, random_state=seed).reset_index(drop=True)
+ 
+    if len(candidates) < len(bad_indices):
+        raise ValueError(
+            f'Not enough replacement candidates: need {len(bad_indices)}, have {len(candidates)}'
+        )
+ 
+    # Open zarr store
+    split_dir  = os.path.join(cache_dir, split_name)
+    root       = zarr.open_group(zarr.DirectoryStore(split_dir), mode='a')
+    compressor = zarr.Blosc(cname='lz4', clevel=3)
+ 
+    errors = 0
+    for i, bad_idx in enumerate(tqdm(bad_indices, desc='replacing bad indices')):
+        key         = str(bad_idx)
+        replacement = candidates.iloc[i]
+ 
+        # Build file paths
+        ts = pd.to_datetime(str(replacement['timestamp']), format='%Y%m%dT%H%M%S', errors='coerce')
+        y  = str(ts.year).zfill(4)
+        m  = str(ts.month).zfill(2)
+        d  = str(ts.day).zfill(2)
+        amsr2_path = os.path.join(data_dirs[0], y, m, d, replacement['amsr2_file'])
+        sic_path   = os.path.join(data_dirs[1], y, m, d, replacement['sic_file'])
+ 
+        try:
+            amsr2, sic, mask = process_pair(amsr2_path, sic_path)
+ 
+            # Delete existing bad arrays
+            for group in ['amsr2', 'sic', 'mask']:
+                if key in root[group]:
+                    del root[group][key]
+ 
+            # Write replacement arrays
+            root.require_group('amsr2')[key] = zarr.array(amsr2, chunks=amsr2.shape, compressor=compressor)
+            root.require_group('sic')[key]   = zarr.array(sic,   chunks=sic.shape,   compressor=compressor)
+            root.require_group('mask')[key]  = zarr.array(mask,  chunks=mask.shape,  compressor=compressor)
+ 
+            # Build full replacement row matching training index columns
+            new_row = replacement.to_dict()
+            new_row.update(_compute_row_stats(replacement))
+ 
+            # Align to training_df columns and assign
+            new_series = pd.Series(new_row)
+            common_cols = training_df.columns.intersection(new_series.index)
+            training_df.iloc[
+                bad_idx,
+                training_df.columns.get_indexer(common_cols)
+            ] = new_series[common_cols].values
+ 
+            print(f'  Replaced index {bad_idx} with {replacement["amsr2_file"]}')
+ 
+        except Exception as e:
+            print(f'  Error replacing index {bad_idx}: {e}')
+            errors += 1
+ 
+    # Save updated CSV
+    training_df.to_csv(csv_path, index=False)
+    print(f'\nTraining index updated → {csv_path}')
+    print(f'Done. Replaced: {len(bad_indices) - errors}, Errors: {errors}.')
+ 
+ 
+def reprocess_indices(indices, df_split, split_name, cache_dir, channel_names):
+    """
+    Reprocess and overwrite specific indices in the zarr cache.
+    Use this to fix bad samples identified by the dataset scan.
+    """
+    split_dir  = os.path.join(cache_dir, split_name)
+    store      = zarr.DirectoryStore(split_dir)
+    root       = zarr.open_group(store, mode='a')
+    compressor = zarr.Blosc(cname='lz4', clevel=3)
+    errors     = 0
+ 
     for i in tqdm(indices, desc=f'reprocessing {split_name}'):
         key = str(i)
         row = df_split.iloc[i]
         try:
             amsr2, sic, mask = process_pair(row.amsr2_path, row.sic_path)
+ 
+            # Delete existing arrays before overwriting
+            for group in ['amsr2', 'sic', 'mask']:
+                if key in root[group]:
+                    del root[group][key]
+ 
             root.require_group('amsr2')[key] = zarr.array(amsr2, chunks=amsr2.shape, compressor=compressor)
             root.require_group('sic')[key]   = zarr.array(sic,   chunks=sic.shape,   compressor=compressor)
             root.require_group('mask')[key]  = zarr.array(mask,  chunks=mask.shape,  compressor=compressor)
         except Exception as e:
             print(f'Error at index {i}: {e}')
             errors += 1
-
-    print(f'Done. Reprocessed: {len(indices)-errors}, Errors: {errors}.')
+ 
+    print(f'Done. Reprocessed: {len(indices) - errors}, Errors: {errors}.')
 
 if __name__ == '__main__':
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -140,8 +275,8 @@ if __name__ == '__main__':
     file_list = build_filelist(TRAINING_INDEX_CSV, DATA_DIRS)
     print(f'Files to process: {len(file_list)}')
 
-    # add split column to CSV
-    add_split_column(TRAINING_INDEX_CSV)
+    # # add split column to CSV
+    # add_split_column(TRAINING_INDEX_CSV)
 
     train_files, val_files = train_test_split(
         file_list, test_size=VAL_SPLIT_RATIO, random_state=SEED, shuffle=True,
@@ -163,4 +298,11 @@ if __name__ == '__main__':
 
     bad_indices = [4591, 5135, 7841, 16063, 28045, 28885, 33777, 37406, 38530]  # e.g. [42, 137, 891]
     if bad_indices:
-        reprocess_indices(bad_indices, train_files, 'train', CACHE_DIR, channel_names)
+        replace_bad_indices(
+            bad_indices = bad_indices,
+            csv_path    = TRAINING_INDEX_CSV,
+            meta_path   = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/Data/meta/sic_amsr2_metadata_stats_all_years.csv',
+            data_dirs   = DATA_DIRS,
+            cache_dir   = CACHE_DIR,
+            split_name  = 'train',
+        )

@@ -19,7 +19,7 @@ CACHE_DIR  = '/dmidata/projects/asip-cms/ninna_msc/zarr_cache'
 OUTPUT_DIR = "/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/outputs/training/baseline"
 
 ### Parameters ###
-NUM_EPOCHS = 50
+NUM_EPOCHS = 150
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4 
 WEIGHT_DECAY = 1e-5
@@ -30,7 +30,7 @@ FEATURES = 32
 AMSR2_IN_CHANNELS = 14 # The two 89.9 CHz channels for the baseline model
 GRAD_CLIP_NORM    = 1.0
 
-postfix = '1'
+postfix = '2'
 
 ### Setup ###
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -63,19 +63,6 @@ val_loader = DataLoader(
     collate_fn=collate_pad_to_max,
 )
 
-### DataLoader timing test ###
-print("Timing DataLoader...")
-import time
-
-t0 = time.time()
-for i, (amsr2, sic, mask) in enumerate(train_loader):
-    if i == 0:
-        print(f"  First batch: {time.time()-t0:.2f}s  shapes: amsr2={tuple(amsr2.shape)}  sic={tuple(sic.shape)}")
-    if i >= 9:
-        break
-t_total = time.time() - t0
-print(f"  10 batches: {t_total:.2f}s  ({t_total/10:.2f}s per batch)")
-print(f"  Estimated epoch time: {t_total/10 * len(train_loader):.1f}s  ({len(train_loader)} batches)")
 # # Crop to min
 # train_loader = DataLoader(
 #     train_dataset, batch_size=BATCH_SIZE, shuffle=True,
@@ -93,6 +80,21 @@ model = EncDec(in_channels=AMSR2_IN_CHANNELS, features=FEATURES).to(device)
 criterion = nn.MSELoss() # L2
 # criterion_mae = nn.L1Loss() # MAE for more robustness towards outliers
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, min_lr=1e-7, patience=5, verbose=True)
+
+# ### DataLoader timing test ###
+# print("Timing DataLoader...")
+# import time
+
+# t0 = time.time()
+# for i, (amsr2, sic, mask) in enumerate(train_loader):
+#     if i == 0:
+#         print(f"  First batch: {time.time()-t0:.2f}s  shapes: amsr2={tuple(amsr2.shape)}  sic={tuple(sic.shape)}")
+#     if i >= 9:
+#         break
+# t_total = time.time() - t0
+# print(f"  10 batches: {t_total:.2f}s  ({t_total/10:.2f}s per batch)")
+# print(f"  Estimated epoch time: {t_total/10 * len(train_loader):.1f}s  ({len(train_loader)} batches)")
 
 ### Save model summary ###
 summary_path = os.path.join(OUTPUT_DIR, f'model_summary_{postfix}.txt')
@@ -155,10 +157,10 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
         # NaN grad norm guard - if grad norm is non-finite skip optimizer step to avoid corrupting training with bad weights
         if not torch.isfinite(total_norm):
             skipped += 1
+            t_backward += time.time() - t0
             optimizer.zero_grad()  # clear any gradients just in case
             print(f'  NaN grad norm at batch {batch_idx}')
             continue
-        
         optimizer.step()
         t_backward += time.time() - t0
 
@@ -167,7 +169,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
     n = max(len(dataloader)-skipped, 1)  # avoid division by zero
     if skipped:
         print(f"  Warning: {skipped} batches skipped due to non-finite loss")
-    print(f"  load={t_load/n:.2f}s  forward={t_forward/n:.2f}s  backward={t_backward/n:.2f}s  per batch")
+    # print(f"  load={t_load/n:.2f}s  forward={t_forward/n:.2f}s  backward={t_backward/n:.2f}s  per batch")
     return total_loss / n
 
 @torch.no_grad()
@@ -192,7 +194,7 @@ def validate_epoch(model, dataloader, criterion, device):
         total_rmse += masked_rmse(pred, sic, mask)
         total_mae += masked_mae(pred, sic, mask)
         n_processed += 1
-        
+
     n = max(n_processed, 1)  # avoid division by zero
     return total_loss / n, total_rmse / n, total_mae / n
 
@@ -200,9 +202,10 @@ def validate_epoch(model, dataloader, criterion, device):
 history = {'train_loss': [], 'val_loss': [], 'val_rmse': [], 'val_mae': []}
 best_val_loss = float('inf')
 best_ckpt_path = os.path.join(OUTPUT_DIR, f'best_baseline_model_{postfix}.pth')
+history_path = os.path.join(OUTPUT_DIR, f'training_history_{postfix}.npy')
 
 print("\nStarting training...")
-print(f"\n{'Epoch':>6} {'Train Loss':>12} {'Val Loss':>10} {'Val RMSE':>10} {'Val MAE':>10} {'Time':>8}")
+print(f"\n{'Epoch':>6} {'Train Loss':>12} {'Val Loss':>10} {'Val RMSE':>10} {'Val MAE':>10} {'Time':>8} {'lr':>10}")
 
 for epoch in range(1, NUM_EPOCHS + 1):
     start_time = time.time()
@@ -210,12 +213,18 @@ for epoch in range(1, NUM_EPOCHS + 1):
     val_loss, val_rmse, val_mae = validate_epoch(model, val_loader, criterion, device)
     epoch_time = time.time() - start_time
 
+    scheduler.step(val_loss)  # Adjust learning rate based on validation loss
+    current_lr = optimizer.param_groups[0]['lr']
+
     history['train_loss'].append(train_loss)
     history['val_loss'].append(val_loss)
     history['val_rmse'].append(val_rmse)
     history['val_mae'].append(val_mae)
 
-    print(f"{epoch:>6} {train_loss:>12.4f} {val_loss:>10.4f} {val_rmse:>10.4f} {val_mae:>10.4f} {epoch_time:>8.4f}")
+    # Saving history as a numpy file for easy loading and plotting later
+    np.save(history_path, history)
+
+    print(f"{epoch:>6} {train_loss:>12.4f} {val_loss:>10.4f} {val_rmse:>10.4f} {val_mae:>10.4f} {epoch_time:>7.1f}s  lr={current_lr:.2e}")
 
     # Save best model checkpoint
     if val_loss < best_val_loss:
@@ -237,6 +246,7 @@ for epoch in range(1, NUM_EPOCHS + 1):
             'weight_decay':         WEIGHT_DECAY,
             'grad_clip_norm':       GRAD_CLIP_NORM,
             'seed':                 SEED,
+            'scheduler':            scheduler.state_dict(),
             'cache_dir':            CACHE_DIR,
             'collate':              'pad_to_max',
         }, best_ckpt_path)
@@ -245,11 +255,6 @@ for epoch in range(1, NUM_EPOCHS + 1):
 print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
 
 ### Saving ###
-# Saving history as a numpy file for easy loading and plotting later
-history_path = os.path.join(OUTPUT_DIR, f'training_history_{postfix}.npy')
-np.save(history_path, history)
-print(f"Training history saved to {history_path}")
-
 # Saving a sample prediction (first batch of validation batch)
 # load best model weights
 ckpoint = torch.load(best_ckpt_path, map_location=device, weights_only=True)
@@ -260,7 +265,7 @@ amsr2, sic, mask = next(iter(val_loader))
 amsr2, sic, mask = amsr2.to(device), sic.to(device), mask.to(device)
 
 with torch.no_grad():
-    pred = model(amsr2)
+    pred = model(amsr2, target_size=(sic.shape[-2], sic.shape[-1]))
 
 idx = 0 # first sample in the batch
 pred_np = pred[idx, 0].cpu().numpy() # (H,W)

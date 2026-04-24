@@ -5,4 +5,7 @@ Write fancy Model
 Train simple model on bigger dataset
 - Make nan proof using claudes suggestion
 
-
+BASELINE output
+'1' = Full dataset with learning rate scheduler
+'full' = Full dataset
+'2' = Without Kaiming normalization of weights and normalization of BT in model

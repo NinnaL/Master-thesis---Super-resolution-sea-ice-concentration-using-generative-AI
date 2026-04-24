@@ -116,7 +116,7 @@ def sample_training_data(input_path, output_path='Training_index.csv', n_samples
 if __name__ == '__main__':
     df = sample_training_data(
         input_path    = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/Data/meta/sic_amsr2_metadata_stats_all_years.csv',
-        output_path = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/training_index_short.csv',
+        output_path = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/training_index.csv',
         n_samples   = n_samples,
         min_mixed   = min_mixed_frac,
         max_pure    = max_pure_frac,
