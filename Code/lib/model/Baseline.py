@@ -30,7 +30,7 @@ class EncDec(nn.Module):
     #                 nn.init.zeros_(m.bias)
 
     def forward(self, x, target_size):
-        # Normalise AMSR2 brightness temperatures to ~[-1, 2]
+        # # Normalise AMSR2 brightness temperatures to ~[-1, 2]
         # x = (x - 150.0) / 50.0
  
         out = self.features(x)

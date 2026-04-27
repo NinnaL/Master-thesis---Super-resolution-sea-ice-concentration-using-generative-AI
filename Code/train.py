@@ -30,7 +30,7 @@ FEATURES = 32
 AMSR2_IN_CHANNELS = 14 # The two 89.9 CHz channels for the baseline model
 GRAD_CLIP_NORM    = 1.0
 
-postfix = '2'
+postfix = '1'
 
 ### Setup ###
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -77,8 +77,8 @@ val_loader = DataLoader(
 
 ### Model, loss, optimizer ###
 model = EncDec(in_channels=AMSR2_IN_CHANNELS, features=FEATURES).to(device)
-criterion = nn.MSELoss() # L2
-# criterion_mae = nn.L1Loss() # MAE for more robustness towards outliers
+# criterion = nn.MSELoss() # L2
+criterion_mae = nn.L1Loss() # MAE for more robustness towards outliers
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, min_lr=1e-7, patience=5, verbose=True)
 
