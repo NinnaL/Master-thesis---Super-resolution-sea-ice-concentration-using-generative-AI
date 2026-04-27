@@ -9,3 +9,6 @@ BASELINE output
 'full' = Full dataset with learning rate scheduler
 '2' = Without Kaiming normalization of weights and normalization of BT in model
 '1' = Full dataset without normalization with L1 loss
+
+FUSIONNET output
+'1' = with L2 loss
