@@ -1,3 +1,42 @@
+"""
+train.py
+--------
+Training script for AMSR2 → SIC super-resolution models.
+Author: Ninna Juul Ligaard, MSc thesis, DTU/DMI 2026
+
+Usage:
+    python Code/train.py
+
+To switch models, change the import at the top:
+    from lib.model.{name}     import {model name}       as mdl
+
+The output directory is derived automatically from the model name in the model definition:
+    outputs/training/{model.name}
+
+Resume behaviour:
+    If a checkpoint (best_model_{postfix}.pth) already exists in the output
+    directory, training resumes from the saved epoch with the same optimizer
+    and scheduler state. History is also loaded and appended to.
+
+Key design decisions:
+    - Loss is computed only on valid pixels (invalid pixels masked out).
+    - NaN loss and NaN gradient norm guards skip bad batches without
+      corrupting model weights.
+    - Gradient clipping (max_norm=1.0) prevents exploding gradients.
+    - ReduceLROnPlateau scheduler halves the learning rate after 5 epochs
+      without improvement, down to a minimum of 1e-7.
+    - Checkpoints save the full training config alongside model weights
+      so any run can be reproduced or inspected without reading the code.
+
+Outputs (all written to OUTPUT_DIR):
+    best_model_{postfix}.pth        — best checkpoint by val loss
+    training_history_{postfix}.npy  — loss/rmse/mae per epoch
+    training_curves_{postfix}.png   — training curve plots
+    sample_prediction_{postfix}.png — target vs prediction vs error
+    sample_prediction_{postfix}.npz — numpy arrays of the above
+    model_summary_{postfix}.txt     — parameter count and layer list
+"""
+
 import os
 import sys
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
@@ -11,14 +50,16 @@ from torchsummary import summary
 import matplotlib.pyplot as plt
  
 from lib.dataset.dataloader import AMSR2Dataset, collate_crop_to_min, collate_pad_to_max
-# from lib.model.Baseline import EncDec
-from lib.model.FusionNet import FusionNet
+# from lib.model.Baseline import EncDec as mdl
+# from lib.model.FusionNet import FusionNet as mdl
+from lib.model.FusionNetRes import FusionNetRes as mdl
 
 
 ### Configurations ###
 CACHE_DIR  = '/dmidata/projects/asip-cms/ninna_msc/zarr_cache'
-# OUTPUT_DIR = "/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/outputs/training/baseline"
-OUTPUT_DIR = "/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/outputs/training/fusionnet"
+BASE_OUTPUT = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/outputs/training'
+postfix = '1'
+
 
 ### Parameters ###
 NUM_EPOCHS = 150
@@ -29,18 +70,17 @@ NUM_WORKERS = 4
 SEED = 42
 FEATURES = 32
 
-AMSR2_IN_CHANNELS = 14 # The two 89.9 CHz channels for the baseline model
+AMSR2_IN_CHANNELS = 14 # The two 89.9 CHz channels for the baseline model or all 14 channels for the fusion model
 GRAD_CLIP_NORM    = 1.0
 
-postfix = '1'
 
 ### Setup ###
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
+
 
 ### Dataset and DataLoader ###
 train_dataset = AMSR2Dataset(CACHE_DIR, split='train')
@@ -49,6 +89,7 @@ val_dataset   = AMSR2Dataset(CACHE_DIR, split='val')
 # For testing
 # train_dataset = Subset(train_dataset, range(1000))
 # val_dataset   = Subset(val_dataset,   range(200))
+
 
 ### Collate ###
 # Pad to max
@@ -77,27 +118,22 @@ val_loader = DataLoader(
 #     prefetch_factor=4, collate_fn=collate_crop_to_min,
 # )
 
+
 ### Model, loss, optimizer ###
-# model = EncDec(in_channels=AMSR2_IN_CHANNELS, features=FEATURES).to(device)
-model = FusionNet(in_channels=AMSR2_IN_CHANNELS, features=FEATURES).to(device)
+model = mdl(in_channels=AMSR2_IN_CHANNELS, features=FEATURES).to(device)
 criterion = nn.MSELoss() # L2
 # criterion = nn.L1Loss() # MAE for more robustness towards outliers
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, min_lr=1e-7, patience=5, verbose=True)
 
-# ### DataLoader timing test ###
-# print("Timing DataLoader...")
-# import time
 
-# t0 = time.time()
-# for i, (amsr2, sic, mask) in enumerate(train_loader):
-#     if i == 0:
-#         print(f"  First batch: {time.time()-t0:.2f}s  shapes: amsr2={tuple(amsr2.shape)}  sic={tuple(sic.shape)}")
-#     if i >= 9:
-#         break
-# t_total = time.time() - t0
-# print(f"  10 batches: {t_total:.2f}s  ({t_total/10:.2f}s per batch)")
-# print(f"  Estimated epoch time: {t_total/10 * len(train_loader):.1f}s  ({len(train_loader)} batches)")
+### Path generation and loading of checkpoints and history if existing ###
+OUTPUT_DIR = os.path.join(BASE_OUTPUT, model.name.lower())
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+best_ckpt_path = os.path.join(OUTPUT_DIR, f'best_model_{postfix}.pth')
+history_path = os.path.join(OUTPUT_DIR, f'training_history_{postfix}.npy')
+
 
 ### Save model summary ###
 summary_path = os.path.join(OUTPUT_DIR, f'model_summary_{postfix}.txt')
@@ -109,9 +145,16 @@ class _Tee:
  
 with open(summary_path, 'w') as f:
     f.write(f"Samples  : train={len(train_dataset)}  val={len(val_dataset)}\n")
-    f.write(f"Model    : EncDec_simple  |  in_channels={AMSR2_IN_CHANNELS}  |  features={FEATURES}\n\n")
+    f.write(f"Model    : {model.name}  |  in_channels={AMSR2_IN_CHANNELS}  |  features={FEATURES}\n\n")
     sys.stdout = _Tee(f)
-    summary(model.features, input_size=(AMSR2_IN_CHANNELS, 199, 212), device=str(device))
+    try:
+        summary(model.forward, input_size=(AMSR2_IN_CHANNELS, 199, 212), device=str(device))
+    except Exception:
+        n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Trainable parameters: {n_params:,}")
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Conv2d):
+                print(f"  {name}: {module.weight.shape}")
     sys.stdout = sys.__stdout__
  
 
@@ -121,6 +164,7 @@ def masked_rmse(pred, target, mask):
 
 def masked_mae(pred, target, mask):
     return torch.mean(torch.abs(pred[~mask] - target[~mask])).item()
+
 
 ### Training / validation loop ###
 def train_epoch(model, dataloader, criterion, optimizer, device):
@@ -201,16 +245,35 @@ def validate_epoch(model, dataloader, criterion, device):
     n = max(n_processed, 1)  # avoid division by zero
     return total_loss / n, total_rmse / n, total_mae / n
 
-### Training loop ###
-history = {'train_loss': [], 'val_loss': [], 'val_rmse': [], 'val_mae': []}
-best_val_loss = float('inf')
-best_ckpt_path = os.path.join(OUTPUT_DIR, f'best_baseline_model_{postfix}.pth')
-history_path = os.path.join(OUTPUT_DIR, f'training_history_{postfix}.npy')
 
+### Resume from checkpoint if exists ###
+start_epoch = 1
+if os.path.exists(best_ckpt_path):
+    print(f'Resuming from checkpoint: {best_ckpt_path}')
+    ckpoint = torch.load(best_ckpt_path, map_location=device, weights_only=True)
+    model.load_state_dict(ckpoint['model_state_dict'])
+    optimizer.load_state_dict(ckpoint['optimizer_state_dict'])
+    scheduler.load_state_dict(ckpoint['scheduler'])
+    best_val_loss = ckpoint['val_loss']
+    start_epoch = ckpoint['epoch'] + 1
+    print(f"Resumed from epoch {ckpoint['epoch']} with val_loss={best_val_loss:.4f}")
+else:
+    best_val_loss = float('inf')
+
+
+### Load existing history if exists ###
+if os.path.exists(history_path):
+    history = np.load(history_path, allow_pickle=True).item()
+    print(f"Loaded existing training history with {len(history['train_loss'])} epochs")
+else:
+    history = {'train_loss': [], 'val_loss': [], 'val_rmse': [], 'val_mae': []}
+
+
+### Training loop ###
 print("\nStarting training...")
 print(f"\n{'Epoch':>6} {'Train Loss':>12} {'Val Loss':>10} {'Val RMSE':>10} {'Val MAE':>10} {'Time':>8} {'lr':>10}")
 
-for epoch in range(1, NUM_EPOCHS + 1):
+for epoch in range(start_epoch, NUM_EPOCHS + 1):
     start_time = time.time()
     train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
     val_loss, val_rmse, val_mae = validate_epoch(model, val_loader, criterion, device)
@@ -240,6 +303,7 @@ for epoch in range(1, NUM_EPOCHS + 1):
             "val_rmse": val_rmse,
             "val_mae": val_mae,
             # model config
+            "model_name": model.name,
             "in_channels": AMSR2_IN_CHANNELS,  # saved for safe reloading
             "features": FEATURES,
             # training config — for reproducibility and logging
@@ -304,7 +368,7 @@ axes[2].set_title('Prediction Error')
 axes[2].axis('off')
 plt.colorbar(im2, ax=axes[2], fraction=0.046, label='Error (%)')
 
-plt.suptitle('Sample Prediction vs Target (Masked) - best baseline model')
+plt.suptitle(f'Sample Prediction vs Target (Masked) - {model.name}')
 plt.tight_layout()
 png_path = os.path.join(OUTPUT_DIR, f'sample_prediction_{postfix}.png')
 plt.savefig(png_path, dpi=150, bbox_inches='tight')
@@ -333,7 +397,7 @@ axes[2].set_title('Val MAE')
 axes[2].set_xlabel('Epoch')
 axes[2].grid(True, alpha=0.3)
 
-plt.suptitle('Training History - Baseline Model')
+plt.suptitle(f'Training History - {model.name}')
 plt.tight_layout()
 history_png_path = os.path.join(OUTPUT_DIR, f'training_curves_{postfix}.png')
 plt.savefig(history_png_path, dpi=150, bbox_inches='tight')

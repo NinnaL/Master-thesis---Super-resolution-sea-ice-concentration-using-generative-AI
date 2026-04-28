@@ -12,3 +12,6 @@ BASELINE output
 
 FUSIONNET output
 '1' = with L2 loss
+
+FUSIONNETRES output
+'1' = with L2 loss
