@@ -52,7 +52,8 @@ import matplotlib.pyplot as plt
 from lib.dataset.dataloader import AMSR2Dataset, collate_crop_to_min, collate_pad_to_max
 # from lib.model.Baseline import EncDec as mdl
 # from lib.model.FusionNet import FusionNet as mdl
-from lib.model.FusionNetRes import FusionNetRes as mdl
+# from lib.model.FusionNetRes import FusionNetRes as mdl
+from lib.model.FusionNetASPP import FusionNetASPP as mdl
 
 
 ### Configurations ###

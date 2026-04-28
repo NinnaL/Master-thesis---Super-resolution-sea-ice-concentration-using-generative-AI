@@ -15,3 +15,6 @@ FUSIONNET output
 
 FUSIONNETRES output
 '1' = with L2 loss
+
+FUSIONNETASPP output
+'1' = with L2 loss
