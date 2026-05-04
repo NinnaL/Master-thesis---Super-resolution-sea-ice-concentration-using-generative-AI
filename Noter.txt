@@ -12,6 +12,17 @@ FUSIONNETRES output
 FUSIONNETASPP output
 '1' = with L2 loss
 '2' = with L1 loss
+'3' = with L1 loss and 128 features
 
 
+
+
+TODO
+- 0% SIC values near the coast is a bleed from the upsampling, fixed but not a real problem
+- Run model for more epochs (until validation loss goes up) + with more features and more complexity (started with 128 features)
+- Train diffusion model (started with 500 epochs)
+    - Fix .py script for this
+
+
+NOTES
 - get calibrated uncertainty -> should be evaluated with CRPS or reliability diagrams

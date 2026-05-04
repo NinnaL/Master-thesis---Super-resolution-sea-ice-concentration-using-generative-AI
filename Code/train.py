@@ -50,26 +50,26 @@ from torchsummary import summary
 import matplotlib.pyplot as plt
  
 from lib.dataset.dataloader import AMSR2Dataset, collate_crop_to_min, collate_pad_to_max
-from lib.model.Baseline import CNN as mdl
+# from lib.model.Baseline import CNN as mdl
 # from lib.model.FusionNet import FusionNet as mdl
 # from lib.model.FusionNetRes import FusionNetRes as mdl
-# from lib.model.FusionNetASPP import FusionNetASPP as mdl
+from lib.model.FusionNetASPP import FusionNetASPP as mdl
 
 
 ### Configurations ###
 CACHE_DIR  = '/dmidata/projects/asip-cms/ninna_msc/zarr_cache'
 BASE_OUTPUT = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/outputs/training'
-postfix = '2'
+postfix = '3'
 
 
 ### Parameters ###
-NUM_EPOCHS = 150
+NUM_EPOCHS = 500
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4 
 WEIGHT_DECAY = 1e-5
 NUM_WORKERS = 4
 SEED = 42
-FEATURES = 32
+FEATURES = 128
 
 AMSR2_IN_CHANNELS = 14 # The two 89.9 CHz channels for the baseline model or all 14 channels for the fusion model
 GRAD_CLIP_NORM    = 1.0
@@ -122,8 +122,8 @@ val_loader = DataLoader(
 
 ### Model, loss, optimizer ###
 model = mdl(in_channels=AMSR2_IN_CHANNELS, features=FEATURES).to(device)
-criterion = nn.MSELoss() # L2
-# criterion = nn.L1Loss() # MAE for more robustness towards outliers
+# criterion = nn.MSELoss() # L2
+criterion = nn.L1Loss() # MAE for more robustness towards outliers
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, min_lr=1e-7, patience=5, verbose=True)
 
