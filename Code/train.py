@@ -50,16 +50,16 @@ from torchsummary import summary
 import matplotlib.pyplot as plt
  
 from lib.dataset.dataloader import AMSR2Dataset, collate_crop_to_min, collate_pad_to_max
-# from lib.model.Baseline import EncDec as mdl
+from lib.model.Baseline import CNN as mdl
 # from lib.model.FusionNet import FusionNet as mdl
 # from lib.model.FusionNetRes import FusionNetRes as mdl
-from lib.model.FusionNetASPP import FusionNetASPP as mdl
+# from lib.model.FusionNetASPP import FusionNetASPP as mdl
 
 
 ### Configurations ###
 CACHE_DIR  = '/dmidata/projects/asip-cms/ninna_msc/zarr_cache'
 BASE_OUTPUT = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/outputs/training'
-postfix = '1'
+postfix = '2'
 
 
 ### Parameters ###

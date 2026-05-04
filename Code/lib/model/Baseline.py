@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class EncDec(nn.Module):
+class CNN(nn.Module):
     name = 'Baseline'
     def __init__(self, in_channels, features=64):
         super().__init__()

@@ -1,13 +1,6 @@
-criterion = MSELoss?? Should be L2 (or L1 - a bit more noisy, but more precise)
-
-Write fancy Model
-
-Train simple model on bigger dataset
-- Make nan proof using claudes suggestion
-
 BASELINE output
 'full' = Full dataset with learning rate scheduler
-'2' = Without Kaiming normalization of weights and normalization of BT in model
+'2' = Without Kaiming normalization of weights and normalization of BT in model with L2 loss
 '1' = Full dataset without normalization with L1 loss
 
 FUSIONNET output
@@ -18,3 +11,7 @@ FUSIONNETRES output
 
 FUSIONNETASPP output
 '1' = with L2 loss
+'2' = with L1 loss
+
+
+- get calibrated uncertainty -> should be evaluated with CRPS or reliability diagrams
