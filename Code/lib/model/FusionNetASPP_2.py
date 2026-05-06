@@ -77,9 +77,12 @@ class FusionNetASPP_2(nn.Module):
         ### Decoder ###
         self.up         = nn.ConvTranspose2d(features, features, kernel_size=3, stride=2, padding=1, output_padding=1)  # Upsample by 2
 
-        self.reduces    = nn.Sequential(
-                            nn.Conv2d(features*2, features, kernel_size=3, padding=1),
-                            nn.ReLU())
+        self.reduces    = nn.ModuleList([
+                            nn.Sequential(
+                                nn.Conv2d(features*2, features, kernel_size=3, padding=1),
+                                nn.ReLU())
+                            for _ in range(6) #s6, s5, s4, s3, s2, s1
+                        ])
 
         self.final_conv = nn.Conv2d(features, 1, kernel_size=3, padding=1)
 
@@ -98,49 +101,36 @@ class FusionNetASPP_2(nn.Module):
         s4 = self.conv_stride(torch.cat([s3, x[:, -8:-6]], dim=1))    # 18.7 GHz HH and HV
         s4 = self.res_blocks(s4)            # Add residual blocks
         
-        x5 = F.interpolate(x[:, -10:-8], size=s4.shape[2:], mode='bilinear', align_corners=False)  # Downsample input for 10.7 GHz
+        x5 = F.interpolate(x[:, -10:-8], size=s4.shape[2:], mode='bicubic', align_corners=False)  # Downsample input for 10.7 GHz
         s5 = self.conv1(torch.cat([s4, x5], dim=1))   # 10.7 GHz HH and HV
         s5 = self.res_blocks(s5)            # Add residual blocks
         
         # ── Encoder — stride-2 → (H/4, W/4) ─────────────────────────────────
-        x6 = F.interpolate(x[:, -12:-10], size=s5.shape[2:], mode='bilinear', align_corners=False)  # Downsample input for 7.3 GHz
+        x6 = F.interpolate(x[:, -12:-10], size=s5.shape[2:], mode='bicubic', align_corners=False)  # Downsample input for 7.3 GHz
         s6 = self.conv_stride(torch.cat([s5, x6], dim=1))  # 7.3 GHz HH and HV
         s6 = self.res_blocks(s6)            # Add residual blocks
         
-        x7 = F.interpolate(x[:, -14:-12], size=s6.shape[2:], mode='bilinear', align_corners=False)  # Downsample input for 6.9 GHz
+        x7 = F.interpolate(x[:, -14:-12], size=s6.shape[2:], mode='bicubic', align_corners=False)  # Downsample input for 6.9 GHz
         s7 = self.conv(torch.cat([s6, x7], dim=1))  # 6.9 GHz HH and HV
         s7 = self.res_blocks(s7)            # Add residual blocks
 
         # ── ASPP bottleneck at (H/4, W/4) ────────────────────────────────────
         d = self.aspp(s7)
 
-        # ── Decoder — (H/4, W/4) → (H/2, W/2) ───────────────────────────────
-        d = self.res_blocks(d)
-        d = self.up(d)
-        d = F.interpolate(d, size=s6.shape[2:], mode='nearest')                 # snap odd dims
-        d = self.reduces(torch.cat([d, s6], dim=1))                             # fuse s6 skip
+        # ── Decoder ───────────────────────────────────────────────────────────
+        # skips in order they are consumed: s6→s5 at (H/2,W/2), s4→s3→s2→s1 at (H,W)
+        skips = [s6, s5, s4, s3, s2, s1]
 
-        d = self.res_blocks(d)
-        d = F.interpolate(d, size=s5.shape[2:], mode='nearest')
-        d = self.reduces(torch.cat([d, s5], dim=1))                             # fuse s5 skip
+        for i, skip in enumerate(skips):
+            # Upsample before s6 (i=0) and s4 (i=2) — the two resolution transitions
+            if i == 0:
+                d = self.up(d)   # (H/4, W/4) → (H/2, W/2)
+            elif i == 2:
+                d = self.up(d)   # (H/2, W/2) → (H, W)
 
-        # ── Decoder — (H/2, W/2) → (H, W) ───────────────────────────────────
-        d = self.res_blocks(d)
-        d = self.up(d)
-        d = F.interpolate(d, size=s4.shape[2:], mode='nearest')                 # snap odd dims
-        d = self.reduces(torch.cat([d, s4], dim=1))                             # fuse s4 skip
-
-        d = self.res_blocks(d)
-        d = F.interpolate(d, size=s3.shape[2:], mode='nearest')
-        d = self.reduces(torch.cat([d, s3], dim=1))                             # fuse s3 skip
-
-        d = self.res_blocks(d)
-        d = F.interpolate(d, size=s2.shape[2:], mode='nearest')
-        d = self.reduces(torch.cat([d, s2], dim=1))                             # fuse s2 skip
-
-        d = self.res_blocks(d)
-        d = F.interpolate(d, size=s1.shape[2:], mode='nearest')
-        d = self.reduces(torch.cat([d, s1], dim=1))                             # fuse s1 skip
+            d = self.res_blocks(d)
+            d = F.interpolate(d, size=skip.shape[2:], mode='nearest')  # snap odd dims
+            d = self.reduces[i](torch.cat([d, skip], dim=1))           # stage-specific weights
 
         # ── Output ────────────────────────────────────────────────────────────
         d   = self.res_blocks(d)
