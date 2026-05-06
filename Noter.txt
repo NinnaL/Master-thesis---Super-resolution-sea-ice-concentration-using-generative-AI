@@ -14,7 +14,8 @@ FUSIONNETASPP output
 '2' = with L1 loss
 '3' = with L1 loss and 128 features
 
-
+DIFFUSION output
+something_'mdl.name'_'postfix' = uses the above output as condition
 
 
 TODO
