@@ -181,8 +181,8 @@ if os.path.exists(DIFF_CKPT):
     ckpt = torch.load(DIFF_CKPT, map_location=device, weights_only=True)
     if isinstance(ckpt, dict) and 'state_dict' in ckpt:
         score_model.load_state_dict(ckpt['state_dict'])
-        # if 'ema_state_dict' in ckpt:
-        #     ema.load_state_dict(ckpt['ema_state_dict'])
+        if 'ema_state_dict' in ckpt:
+            ema.load_state_dict(ckpt['ema_state_dict'])
         start_epoch = ckpt.get('epoch', 0) + 1
         best_val    = ckpt.get('best_val_loss', float('inf'))
         for _ in range(start_epoch):

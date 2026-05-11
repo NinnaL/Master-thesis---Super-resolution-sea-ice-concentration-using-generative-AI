@@ -263,8 +263,19 @@ def load_models(code_dir, fusion_ckpt_base, postfix, diff_ckpt, best_ckpt, devic
     else:
         score_model = inner_model
 
+    # infer_path = best_ckpt if os.path.exists(best_ckpt) else diff_ckpt
+    # ckpt       = torch.load(infer_path, map_location=device, weights_only=True)
     infer_path = best_ckpt if os.path.exists(best_ckpt) else diff_ckpt
-    ckpt       = torch.load(infer_path, map_location=device, weights_only=True)
+
+    if not os.path.exists(infer_path):
+        raise FileNotFoundError(
+            f'No diffusion checkpoint found.\n'
+            f'  Best : {best_ckpt}\n'
+            f'  Diff : {diff_ckpt}\n'
+            f'Run training before loading models.'
+        )
+
+    ckpt = torch.load(infer_path, map_location=device, weights_only=True)
 
     if 'ema_state_dict' in ckpt:
         inner = score_model.module if hasattr(score_model, 'module') else score_model
