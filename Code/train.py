@@ -25,6 +25,7 @@ Key design decisions:
     - Gradient clipping (max_norm=1.0) prevents exploding gradients.
     - ReduceLROnPlateau scheduler halves the learning rate after 5 epochs
       without improvement, down to a minimum of 1e-7.
+      New: Learning rate scheduler at given intervals
     - Checkpoints save the full training config alongside model weights
       so any run can be reproduced or inspected without reading the code.
 
@@ -59,7 +60,7 @@ from lib.model.FusionNetASPP import FusionNetASPP as mdl
 ### Configurations ###
 CACHE_DIR  = '/dmidata/projects/asip-cms/ninna_msc/zarr_cache'
 BASE_OUTPUT = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/outputs/training'
-postfix = '3'
+postfix = '4'
 
 
 ### Parameters ###
@@ -125,8 +126,8 @@ model = mdl(in_channels=AMSR2_IN_CHANNELS, features=FEATURES).to(device)
 # criterion = nn.MSELoss() # L2
 criterion = nn.L1Loss() # MAE for more robustness towards outliers
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, min_lr=1e-7, patience=5, verbose=True)
-
+# scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, min_lr=1e-7, patience=5, verbose=True)
+scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[100, 150, 200], gamma=0.1)
 
 ### Path generation and loading of checkpoints and history if existing ###
 OUTPUT_DIR = os.path.join(BASE_OUTPUT, model.name.lower())
@@ -251,7 +252,7 @@ def validate_epoch(model, dataloader, criterion, device):
 start_epoch = 1
 if os.path.exists(best_ckpt_path):
     print(f'Resuming from checkpoint: {best_ckpt_path}')
-    ckpoint = torch.load(best_ckpt_path, map_location=device, weights_only=True)
+    ckpoint = torch.load(best_ckpt_path, map_location=device, weights_only=False)
     model.load_state_dict(ckpoint['model_state_dict'])
     optimizer.load_state_dict(ckpoint['optimizer_state_dict'])
     scheduler.load_state_dict(ckpoint['scheduler'])
@@ -280,7 +281,8 @@ for epoch in range(start_epoch, NUM_EPOCHS + 1):
     val_loss, val_rmse, val_mae = validate_epoch(model, val_loader, criterion, device)
     epoch_time = time.time() - start_time
 
-    scheduler.step(val_loss)  # Adjust learning rate based on validation loss
+    # scheduler.step(val_loss)  # Adjust learning rate based on validation loss
+    scheduler.step()  # Adjust learning rate at given intervals
     current_lr = optimizer.param_groups[0]['lr']
 
     history['train_loss'].append(train_loss)
@@ -325,7 +327,7 @@ print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
 ### Saving ###
 # Saving a sample prediction (first batch of validation batch)
 # load best model weights
-ckpoint = torch.load(best_ckpt_path, map_location=device, weights_only=True)
+ckpoint = torch.load(best_ckpt_path, map_location=device, weights_only=False)
 model.load_state_dict(ckpoint['model_state_dict'])
 model.eval()
 

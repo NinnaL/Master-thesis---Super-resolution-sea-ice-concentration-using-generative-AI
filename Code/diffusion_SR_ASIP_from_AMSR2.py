@@ -34,7 +34,6 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from torch.optim import Adam
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 postfix = '3'
 
@@ -218,8 +217,7 @@ if not args.predict:
         num_items = 0
         pending_grad = False  # track if we have unstepped gradients from accumulation
 
-        pbar = tqdm(train_loader, desc=f'Epoch {epoch}', leave=False)
-        for i, (amsr2, sic, _) in enumerate(pbar):
+        for i, (amsr2, sic, _) in enumerate(train_loader):
             amsr2 = amsr2.to(device)
             sic   = sic.to(device)
 
@@ -242,7 +240,6 @@ if not args.predict:
 
             avg_loss  += loss.item() * sic.shape[0]
             num_items += sic.shape[0]
-            pbar.set_postfix(loss=f'{avg_loss / max(num_items, 1):.5f}')
 
         epoch_train_loss = avg_loss / max(num_items, 1)
 

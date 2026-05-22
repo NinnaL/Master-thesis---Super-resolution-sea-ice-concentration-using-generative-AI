@@ -13,6 +13,7 @@ FUSIONNETASPP output
 '1' = with L2 loss
 '2' = with L1 loss
 '3' = with L1 loss and 128 features
+'4' = new learning rate scheduler at [100, 150, 200]
 
 DIFFUSION output
 something_'mdl.name'_'postfix' = uses the above output as condition
