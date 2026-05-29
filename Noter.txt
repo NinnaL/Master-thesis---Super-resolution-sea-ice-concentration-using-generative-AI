@@ -20,10 +20,8 @@ something_'mdl.name'_'postfix' = uses the above output as condition
 
 
 TODO
-- 0% SIC values near the coast is a bleed from the upsampling, fixed but not a real problem
-- Run model for more epochs (until validation loss goes up) + with more features and more complexity (started with 128 features)
-- Train diffusion model (started with 500 epochs)
-    - Fix .py script for this
+- What data to use for validation?
+- 
 
 
 NOTES

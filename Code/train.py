@@ -127,7 +127,9 @@ model = mdl(in_channels=AMSR2_IN_CHANNELS, features=FEATURES).to(device)
 criterion = nn.L1Loss() # MAE for more robustness towards outliers
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, min_lr=1e-7, patience=5, verbose=True)
-scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[100, 150, 200], gamma=0.1)
+MILESTONES = [100, 150, 200]
+GAMMA      = 0.1
+scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=MILESTONES, gamma=GAMMA)
 
 ### Path generation and loading of checkpoints and history if existing ###
 OUTPUT_DIR = os.path.join(BASE_OUTPUT, model.name.lower())
@@ -255,10 +257,29 @@ if os.path.exists(best_ckpt_path):
     ckpoint = torch.load(best_ckpt_path, map_location=device, weights_only=False)
     model.load_state_dict(ckpoint['model_state_dict'])
     optimizer.load_state_dict(ckpoint['optimizer_state_dict'])
-    scheduler.load_state_dict(ckpoint['scheduler'])
+    # scheduler.load_state_dict(ckpoint['scheduler'])
     best_val_loss = ckpoint['val_loss']
     start_epoch = ckpoint['epoch'] + 1
-    print(f"Resumed from epoch {ckpoint['epoch']} with val_loss={best_val_loss:.4f}")
+
+    # Compute what the lr should be at this epoch based on milestones
+    n_milestones_passed = sum(1 for m in MILESTONES if m <= ckpoint['epoch'])
+    current_lr = LEARNING_RATE * (GAMMA ** n_milestones_passed)
+
+    for pg in optimizer.param_groups:
+        pg['lr']         = current_lr
+        pg['initial_lr'] = LEARNING_RATE
+
+    # Rebuild scheduler — set last_epoch so next milestones fire correctly
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer, milestones=MILESTONES, gamma=GAMMA,
+        last_epoch=ckpoint['epoch'])
+
+    print(f"Resumed from epoch {ckpoint['epoch']}  "
+          f"val_loss={best_val_loss:.4f}  "
+          f"lr={current_lr:.2e}  "
+          f"milestones_passed={n_milestones_passed}")
+
+    # print(f"Resumed from epoch {ckpoint['epoch']} with val_loss={best_val_loss:.4f}")
 else:
     best_val_loss = float('inf')
 
@@ -266,6 +287,11 @@ else:
 ### Load existing history if exists ###
 if os.path.exists(history_path):
     history = np.load(history_path, allow_pickle=True).item()
+
+    # for k in history:
+    #     history[k] = history[k][:103]
+
+    # np.save(history_path, history)
     print(f"Loaded existing training history with {len(history['train_loss'])} epochs")
 else:
     history = {'train_loss': [], 'val_loss': [], 'val_rmse': [], 'val_mae': []}
