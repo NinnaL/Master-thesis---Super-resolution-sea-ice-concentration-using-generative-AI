@@ -289,7 +289,7 @@ if os.path.exists(history_path):
     history = np.load(history_path, allow_pickle=True).item()
 
     # for k in history:
-    #     history[k] = history[k][:103]
+    #     history[k] = history[k][:ckpoint['epoch']]
 
     # np.save(history_path, history)
     print(f"Loaded existing training history with {len(history['train_loss'])} epochs")

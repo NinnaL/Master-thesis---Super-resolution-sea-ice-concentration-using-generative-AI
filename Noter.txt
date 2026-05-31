@@ -20,8 +20,12 @@ something_'mdl.name'_'postfix' = uses the above output as condition
 
 
 TODO
-- What data to use for validation?
-- 
+- Set up script that runs over the validation years and save netcdf with coordinates, timestamp and SIC
+- Clip and collect images to full arctic
+- Validation (!)
+
+- Fix resampling of swaths to 2 km grid
+- Predict full pan-arctic area
 
 
 NOTES
