@@ -41,7 +41,7 @@ from lib.model.FusionNetASPP import FusionNetASPP
 ### Config ### 
 MODEL_NAME      = 'fusionnetaspp'
 POSTFIX         = '4'
-YEARS           = [2020]
+YEARS           = [2023]
  
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Using device: {device}')
@@ -88,29 +88,6 @@ def read_gcp_from_zip(zip_path):
 
 ### Mask extractor ###
 # Land
-# def get_land_mask_for_scene(land_geoms, lats, lons, grid_h, grid_w):
-#     """
-#     Rasterize land shapefile onto the exact AMSR2 scene grid using the
-#     GCP bounding box in EPSG:3411. Handles scene rotation correctly by
-#     deriving the affine transform from the actual GCP projected coordinates.
-#     """
-#     transformer    = Transformer.from_crs('EPSG:4326', 'EPSG:3411', always_xy=True)
-#     x_3411, y_3411 = transformer.transform(lons, lats)
-#     x_min, x_max   = x_3411.min(), x_3411.max()
-#     y_min, y_max   = y_3411.min(), y_3411.max()
- 
-#     transform = rtransform.from_bounds(
-#         x_min, y_min, x_max, y_max, grid_w, grid_h
-#     )
-#     land_mask = rasterize(
-#         land_geoms,
-#         out_shape=(grid_h, grid_w),
-#         transform=transform,
-#         fill=0,
-#         dtype=np.uint8,
-#         all_touched=True,
-#     )
-#     return land_mask
 def get_land_mask_for_scene(land_geoms, lats, lons, lines, pixels, grid_h, grid_w):
     """
     Rasterize land shapefile onto the exact AMSR2 scene grid using the
@@ -212,11 +189,17 @@ def save_prediction_nc(out_file, pred,
     )
     ds_out.to_netcdf(out_file)
 
+def pad(tensor, fill, out_h, out_w):
+    c, h, w = tensor.shape
+    out = torch.full((c, out_h, out_w), fill, dtype=tensor.dtype)
+    out[:, :h, :w] = tensor
+    return out
+
 ### Inference loop ###
 errors = 0
 skipped = 0
 
-for amsr2_path in tqdm(amsr2_files, desc='Processing AMSR2 files'):
+for amsr2_path in tqdm(amsr2_files[:4], desc='Processing AMSR2 files'):
     # Derive matching SAR and SIC paths
     parts        = amsr2_path.split('/')
     date_idx     = parts.index('AMSR2') + 1
@@ -251,7 +234,6 @@ for amsr2_path in tqdm(amsr2_files, desc='Processing AMSR2 files'):
 
         with torch.no_grad():
             pred = model(amsr2_t, target_size=(amsr2_h, amsr2_w))
-        
         pred_np = np.clip(pred[0,0].cpu().numpy(), 0, 100)  # [H, W]
 
         # Load gcps
@@ -261,8 +243,8 @@ for amsr2_path in tqdm(amsr2_files, desc='Processing AMSR2 files'):
         invalid_mask = get_sar_invalid_mask(sar_path, amsr2_h, amsr2_w)
         land_mask = get_land_mask_for_scene(land_geoms, lats, lons, lines, pixels, amsr2_h, amsr2_w)
 
-        pred_np[:, :3] = 255 # First 3 columns to be invalid
-        pred_np[:, -3:] = 255 # Last 3 columns to be invalid
+        pred_np[:, :4] = 255 # First 4 columns to be invalid
+        pred_np[:, -4:] = 255 # Last 4 columns to be invalid
         pred_np[invalid_mask == 1] = 255
         pred_np[land_mask == 1] = 254
 

@@ -41,7 +41,7 @@ from lib.model.FusionNetASPP import FusionNetASPP
 ### Config ### 
 MODEL_NAME      = 'fusionnetaspp'
 POSTFIX         = '4'
-YEARS           = [2020]
+YEARS           = [2022]
  
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Using device: {device}')
@@ -189,85 +189,128 @@ def save_prediction_nc(out_file, pred,
     )
     ds_out.to_netcdf(out_file)
 
-### Inference loop ###
-def process_scene(amsr2_path):
-    # Derive matching SAR and SIC paths
-    parts        = amsr2_path.split('/')
-    date_idx     = parts.index('AMSR2') + 1
-    y, m, d      = parts[date_idx], parts[date_idx+1], parts[date_idx+2]
-    amsr2_base   = os.path.basename(amsr2_path)
-    scene_id     = amsr2_base.replace('AMSR2_', '').replace('.nc', '')
-    sar_path     = os.path.join(SAR_BASE, y, m, d, scene_id + '.zip')
-
-    # Output path
-    out_dir = os.path.join(BASE_OUTPUT, y, m, d)
-    out_file = os.path.join(out_dir, scene_id + '_prediction.nc')
-    os.makedirs(out_dir, exist_ok=True)
-
-    # Check if output already exists or if input files are missing
-    if os.path.exists(out_file):
-        return 'skipped'
-    if not os.path.exists(sar_path):
-        return f'missing_sar:{sar_path}'
-
-    try:
-        with xr.open_dataset(amsr2_path) as ds:
-            ch_names  = [v for v in ds.data_vars if 'swath' not in v.lower()]
-            amsr2_np  = ds[ch_names].to_array().values.astype(np.float32)
-        amsr2_h, amsr2_w = amsr2_np.shape[-2], amsr2_np.shape[-1]
-
-        # Run inference
-        amsr2_np = np.nan_to_num(amsr2_np, nan=0.0)
-        amsr2_t = torch.from_numpy(amsr2_np)[None].to(device)  # [1, C, H, W]
-
-        with torch.no_grad():
-            pred = model(amsr2_t, target_size=(amsr2_h, amsr2_w))
-        
-        pred_np = np.clip(pred[0,0].cpu().numpy(), 0, 100)  # [H, W]
-
-        # Load gcps
-        lines, pixels, lats, lons = read_gcp_from_zip(sar_path)
-
-        # Load masks
-        invalid_mask = get_sar_invalid_mask(sar_path, amsr2_h, amsr2_w)
-        land_mask = get_land_mask_for_scene(land_geoms, lats, lons, lines, pixels, amsr2_h, amsr2_w)
-
-        pred_np[:, :3] = 255 # First 3 columns to be invalid
-        pred_np[:, -3:] = 255 # Last 3 columns to be invalid
-        pred_np[invalid_mask == 1] = 255
-        pred_np[land_mask == 1] = 254
-
-        # Save as netCDF
-        save_prediction_nc(out_file, pred_np,
-                            lines, pixels, lats, lons,
-                            amsr2_base, scene_id, ckpt,
-                            MODEL_NAME, POSTFIX)
-        return 'ok'
-    
-    except Exception as e:
-        tqdm.write(f'Error processing {amsr2_path}: {e}')
-        errors += 1
-
 ### Inference loop — parallel I/O, sequential GPU ###
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import multiprocessing as mp
+from queue import Empty
+# After loading the shapefile — serialise geometries for multiprocessing
+import pickle
+land_geoms_wkb = [(geom.wkb, val) for geom, val in land_geoms]
+
+def cpu_worker(amsr2_path, sar_path, land_geoms_wkb, amsr2_h, amsr2_w):
+    """CPU-bound work: read SAR, compute masks — runs in separate process."""
+    from shapely.wkb import loads as wkb_loads
+    # Deserialise geometries in the worker process
+    land_geoms = [(wkb_loads(wkb), val) for wkb, val in land_geoms_wkb]
+
+    lines, pixels, lats, lons = read_gcp_from_zip(sar_path)
+    invalid_mask = get_sar_invalid_mask(sar_path, amsr2_h, amsr2_w)
+    land_mask    = get_land_mask_for_scene(
+        land_geoms, lats, lons, lines, pixels, amsr2_h, amsr2_w)
+    return lines, pixels, lats, lons, invalid_mask, land_mask
+
+
+### Inference loop — prefetch CPU work while GPU runs ###
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import collections
+
 errors  = 0
 skipped = 0
-N_WORKERS = 2  # number of parallel threads — tune to your I/O bandwidth
 
-with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
-    futures = {executor.submit(process_scene, p): p for p in amsr2_files}
-    for future in tqdm(as_completed(futures), total=len(amsr2_files),
-                       desc='Processing AMSR2 files'):
-        result = future.result()
-        if result == 'skipped':
-            skipped += 1
-        elif result.startswith('error') or result.startswith('missing'):
-            tqdm.write(f'  {result}  [{futures[future]}]')
+# Split into batches — prefetch next batch's CPU work while GPU processes current
+PREFETCH = 8  # number of scenes to prefetch CPU work for
+
+todo = [(p, os.path.join(SAR_BASE,
+         *p.split('/')[p.split('/').index('AMSR2')+1:p.split('/').index('AMSR2')+4],
+         os.path.basename(p).replace('AMSR2_','').replace('.nc','') + '.zip'))
+        for p in amsr2_files
+        if not os.path.exists(os.path.join(
+            BASE_OUTPUT,
+            *p.split('/')[p.split('/').index('AMSR2')+1:p.split('/').index('AMSR2')+4],
+            os.path.basename(p).replace('AMSR2_','').replace('.nc','') + '_prediction.nc'))]
+
+skipped = len(amsr2_files) - len(todo)
+print(f'To process: {len(todo)}  Already done: {skipped}')
+
+with ProcessPoolExecutor(max_workers=PREFETCH) as pool:
+    # Submit first batch
+    pending = collections.deque()
+    it = iter(todo)
+
+    def submit_next():
+        try:
+            amsr2_path, sar_path = next(it)
+            if not os.path.exists(sar_path):
+                return False, amsr2_path
+            # Load AMSR2 shape first to know grid size
+            with xr.open_dataset(amsr2_path) as ds:
+                ch_names = [v for v in ds.data_vars if 'swath' not in v.lower()]
+                shape    = ds[ch_names[0]].shape
+            h, w = shape
+            fut = pool.submit(cpu_worker, amsr2_path, sar_path, land_geoms_wkb, h, w)
+            pending.append((amsr2_path, sar_path, fut))
+            return True, None
+        except StopIteration:
+            return None, None
+
+    # Prime the queue
+    for _ in range(PREFETCH):
+        ok, bad = submit_next()
+        if ok is None:
+            break
+        if ok is False:
+            tqdm.write(f'Warning: SAR not found {bad}')
             errors += 1
 
-print(f'\nDone.')
-print(f'  Processed : {len(amsr2_files) - errors - skipped}')
-print(f'  Skipped   : {skipped}  (already exist)')
-print(f'  Errors    : {errors}')
+    pbar = tqdm(total=len(todo), desc='Processing')
+    while pending:
+        amsr2_path, sar_path, fut = pending.popleft()
 
+        # Submit next while waiting
+        ok, bad = submit_next()
+        if ok is False:
+            errors += 1
+
+        try:
+            lines, pixels, lats, lons, invalid_mask, land_mask = fut.result()
+
+            # Load AMSR2 and run GPU inference — sequential
+            with xr.open_dataset(amsr2_path) as ds:
+                ch_names = [v for v in ds.data_vars if 'swath' not in v.lower()]
+                amsr2_np = ds[ch_names].to_array().values.astype(np.float32)
+            amsr2_h, amsr2_w = amsr2_np.shape[-2], amsr2_np.shape[-1]
+
+            amsr2_input = np.nan_to_num(amsr2_np, nan=150.0)
+            amsr2_t     = torch.from_numpy(amsr2_input)[None].to(device)
+            with torch.no_grad():
+                pred = model(amsr2_t, target_size=(amsr2_h, amsr2_w))
+            pred_np = np.clip(pred[0, 0].cpu().numpy(), 0, 100)
+
+            pred_np[:, :4]  = 255
+            pred_np[:, -4:] = 255
+            pred_np[invalid_mask == 1] = 255
+            pred_np[land_mask    == 1] = 254
+
+            parts    = amsr2_path.split('/')
+            date_idx = parts.index('AMSR2') + 1
+            y, m, d  = parts[date_idx], parts[date_idx+1], parts[date_idx+2]
+            amsr2_base = os.path.basename(amsr2_path)
+            scene_id   = amsr2_base.replace('AMSR2_', '').replace('.nc', '')
+            out_dir    = os.path.join(BASE_OUTPUT, y, m, d)
+            out_file   = os.path.join(out_dir, scene_id + '_prediction.nc')
+
+            save_prediction_nc(out_file, pred_np,
+                               lines, pixels, lats, lons,
+                               amsr2_base, scene_id, ckpt,
+                               MODEL_NAME, POSTFIX)
+        except Exception as e:
+            tqdm.write(f'Error: {os.path.basename(amsr2_path)}: {e}')
+            errors += 1
+
+        pbar.update(1)
+    pbar.close()
+
+print(f'\nDone.')
+print(f'  Processed : {len(todo) - errors}')
+print(f'  Skipped   : {skipped}')
+print(f'  Errors    : {errors}')
 

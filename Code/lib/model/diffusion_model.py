@@ -20,7 +20,7 @@ import torch.nn.functional as F
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 SIC_SENTINEL_MIN = 254   # 254=missing, 255=land
-SIGMA            = 25.0  # must match training script
+SIGMA            = 5.0 #25.0  # must match training script
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -185,11 +185,11 @@ def valid_mask(x):
 
 def prepare_cond(y):
     """Clamp FusionNet output to valid [0,100] range, no normalisation."""
-    return y.clamp(0.0, 100.0)
+    return y.clamp(0.0, 100.0)/100.0 # normalize to [0,1] for conditioning
 
 def prepare_sic(x):
     """Zero out sentinel/NaN pixels, keep valid SIC in original [0,100] range."""
-    return torch.where(valid_mask(x), x, torch.zeros_like(x))
+    return torch.where(valid_mask(x), x/100.0, torch.zeros_like(x)) # normalize to [0,1] for model input
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Sampler

@@ -20,7 +20,8 @@ something_'mdl.name'_'postfix' = uses the above output as condition
 
 
 TODO
-- Set up script that runs over the validation years and save netcdf with coordinates, timestamp and SIC
+- Set up script that runs over the validation years and save netcdf with coordinates and SIC
+    - Fix edges of predictions - invalid first and last 4
 - Clip and collect images to full arctic
 - Validation (!)
 
@@ -30,3 +31,11 @@ TODO
 
 NOTES
 - get calibrated uncertainty -> should be evaluated with CRPS or reliability diagrams
+
+
+
+FOR SUMAN - TODO!
+- Find østkyst Grønland sentinel1 swath
+- Find matching AMSR2 swath
+- Predict + gem i georeference file
+-> Tore

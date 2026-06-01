@@ -24,14 +24,14 @@ os.environ['HDF5_USE_FILE_LOCKING']='FALSE'
 from AMSR2Resampler import AMSR2Resampler
 from grid_config import target_area
 
-data_dir = Path('/dmidata/projects/asip-cms/amsr2/2021/02/04/')
-output_dir = Path('/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/Data')
+data_dir = Path('/dmidata/projects/asip-cms/amsr2/2022/10/13/')
+output_dir = Path('/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/Data/for_suman')
 output_dir.mkdir(parents=True, exist_ok=True)
 
 amsr2_files = sorted(data_dir.glob('*.h5'))
 print(f"Found {len(amsr2_files)} files")
 
-for amsr2_file in amsr2_files:
+for amsr2_file in amsr2_files[9:10]:  # Process only the 10th file for testing
     print(f"Processing: {amsr2_file.name}")
     t0 = time.time()
     try:
