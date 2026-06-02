@@ -237,7 +237,7 @@ def load_models(code_dir, fusion_ckpt_base, postfix, diff_ckpt, best_ckpt, devic
 
     # ── FusionNetASPP ──────────────────────────────────────────────────────────
     fusion_ckpt_path = os.path.join(fusion_ckpt_base, f'{mdl.name.lower()}/best_model_{postfix}.pth')
-    fusion_ckpt      = torch.load(fusion_ckpt_path, map_location=device, weights_only=True)
+    fusion_ckpt      = torch.load(fusion_ckpt_path, map_location=device, weights_only=False)
     fusion_model     = mdl(
         in_channels=fusion_ckpt['in_channels'],
         features=fusion_ckpt['features'],

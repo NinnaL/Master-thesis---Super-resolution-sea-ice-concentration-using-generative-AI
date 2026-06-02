@@ -31,7 +31,7 @@ output_dir.mkdir(parents=True, exist_ok=True)
 amsr2_files = sorted(data_dir.glob('*.h5'))
 print(f"Found {len(amsr2_files)} files")
 
-for amsr2_file in amsr2_files[9:10]:  # Process only the 10th file for testing
+for amsr2_file in amsr2_files[10:20]:  
     print(f"Processing: {amsr2_file.name}")
     t0 = time.time()
     try:
