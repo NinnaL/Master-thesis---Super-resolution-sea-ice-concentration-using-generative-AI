@@ -19,8 +19,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-SIC_SENTINEL_MIN = 254   # 254=missing, 255=land
-SIGMA            = 5.0 #25.0  # must match training script
+# SIC_SENTINEL_MIN = 254   # 254=missing, 255=land
+# SIGMA            = 5.0 #25.0  # must match training script
 
 
 # ══════════════════════════════════════════════════════════════════════════════

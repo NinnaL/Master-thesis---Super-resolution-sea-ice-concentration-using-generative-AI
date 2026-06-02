@@ -127,7 +127,7 @@ model = mdl(in_channels=AMSR2_IN_CHANNELS, features=FEATURES).to(device)
 criterion = nn.L1Loss() # MAE for more robustness towards outliers
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, min_lr=1e-7, patience=5, verbose=True)
-MILESTONES = [150, 200, 250]
+MILESTONES = [200, 250]
 GAMMA      = 0.1
 scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=MILESTONES, gamma=GAMMA)
 
@@ -257,7 +257,6 @@ if os.path.exists(best_ckpt_path):
     optimizer.load_state_dict(ckpoint['optimizer_state_dict'])
     # scheduler.load_state_dict(ckpoint['scheduler'])
     best_val_loss = ckpoint['val_loss']
-    ckpoint['epoch'] = 100
     start_epoch = ckpoint['epoch'] + 1
 
     # Compute what the lr should be at this epoch based on milestones
@@ -283,16 +282,14 @@ else:
     best_val_loss = float('inf')
 
 
-
-
 ### Load existing history if exists ###
 if os.path.exists(history_path):
     history = np.load(history_path, allow_pickle=True).item()
 
-    for k in history:
-        history[k] = history[k][:ckpoint['epoch']]
+    # for k in history:
+    #     history[k] = history[k][:ckpoint['epoch']]
 
-    np.save(history_path, history)
+    # np.save(history_path, history)
     print(f"Loaded existing training history with {len(history['train_loss'])} epochs")
 else:
     history = {'train_loss': [], 'val_loss': [], 'val_rmse': [], 'val_mae': []}

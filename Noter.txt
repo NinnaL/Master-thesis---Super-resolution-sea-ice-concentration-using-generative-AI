@@ -35,7 +35,7 @@ NOTES
 
 
 FOR SUMAN - TODO!
-- Find østkyst Grønland sentinel1 swath
+- Find østkyst Grønland sentinel1 swath (2021/06/15 eller 2021/06/27)
 - Find matching AMSR2 swath
 - Predict + gem i georeference file
 -> Tore
