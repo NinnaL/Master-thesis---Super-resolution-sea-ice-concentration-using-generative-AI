@@ -60,7 +60,7 @@ from lib.model.FusionNetASPP import FusionNetASPP as mdl
 ### Configurations ###
 CACHE_DIR  = '/dmidata/projects/asip-cms/ninna_msc/zarr_cache'
 BASE_OUTPUT = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/outputs/training'
-postfix = '5'
+postfix = '4'
 
 
 ### Parameters ###
@@ -123,6 +123,7 @@ val_loader = DataLoader(
 
 ### Model, loss, optimizer ###
 model = mdl(in_channels=AMSR2_IN_CHANNELS, features=FEATURES).to(device)
+model_name = model.name
 # criterion = nn.MSELoss() # L2
 criterion = nn.L1Loss() # MAE for more robustness towards outliers
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
@@ -132,7 +133,7 @@ GAMMA      = 0.1
 scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=MILESTONES, gamma=GAMMA)
 
 ### Path generation and loading of checkpoints and history if existing ###
-OUTPUT_DIR = os.path.join(BASE_OUTPUT, model.name.lower())
+OUTPUT_DIR = os.path.join(BASE_OUTPUT, model_name.lower())
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 best_ckpt_path = os.path.join(OUTPUT_DIR, f'best_model_{postfix}.pth')
@@ -253,7 +254,10 @@ def validate_epoch(model, dataloader, criterion, device):
 if os.path.exists(best_ckpt_path):
     print(f'Resuming from checkpoint: {best_ckpt_path}')
     ckpoint = torch.load(best_ckpt_path, map_location=device, weights_only=False)
-    model.load_state_dict(ckpoint['model_state_dict'])
+    if isinstance(model, nn.DataParallel):
+        model.module.load_state_dict(ckpoint['model_state_dict'])
+    else:
+        model.load_state_dict(ckpoint['model_state_dict'])
     optimizer.load_state_dict(ckpoint['optimizer_state_dict'])
     # scheduler.load_state_dict(ckpoint['scheduler'])
     best_val_loss = ckpoint['val_loss']
@@ -296,6 +300,9 @@ if os.path.exists(history_path):
 else:
     history = {'train_loss': [], 'val_loss': [], 'val_rmse': [], 'val_mae': []}
 
+if torch.cuda.device_count() > 1:
+    print(f"Using {torch.cuda.device_count()} GPUs for training")
+    model = nn.DataParallel(model)
 
 ### Training loop ###
 print("\nStarting training...")
@@ -326,13 +333,13 @@ for epoch in range(start_epoch, NUM_EPOCHS + 1):
         best_val_loss = val_loss
         torch.save({
             "epoch": epoch,
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "val_loss": val_loss,
             "val_rmse": val_rmse,
             "val_mae": val_mae,
             # model config
-            "model_name": model.name,
+            "model_name": model_name if isinstance(model, nn.DataParallel) else model.name,
             "in_channels": AMSR2_IN_CHANNELS,  # saved for safe reloading
             "features": FEATURES,
             # training config — for reproducibility and logging
@@ -397,7 +404,7 @@ axes[2].set_title('Prediction Error')
 axes[2].axis('off')
 plt.colorbar(im2, ax=axes[2], fraction=0.046, label='Error (%)')
 
-plt.suptitle(f'Sample Prediction vs Target (Masked) - {model.name}')
+plt.suptitle(f'Sample Prediction vs Target (Masked) - {model_name}')
 plt.tight_layout()
 png_path = os.path.join(OUTPUT_DIR, f'sample_prediction_{postfix}.png')
 plt.savefig(png_path, dpi=150, bbox_inches='tight')
@@ -426,7 +433,7 @@ axes[2].set_title('Val MAE')
 axes[2].set_xlabel('Epoch')
 axes[2].grid(True, alpha=0.3)
 
-plt.suptitle(f'Training History - {model.name}')
+plt.suptitle(f'Training History - {model_name}')
 plt.tight_layout()
 history_png_path = os.path.join(OUTPUT_DIR, f'training_curves_{postfix}.png')
 plt.savefig(history_png_path, dpi=150, bbox_inches='tight')
