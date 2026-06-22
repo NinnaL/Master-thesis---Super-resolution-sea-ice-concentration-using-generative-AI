@@ -32,7 +32,8 @@ CODE_DIR    = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-i
 CKPT_DIR    = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/outputs/training'
 AMSR2_DIR   = '/dmidata/projects/asip-cms/tests/new_input_ncs/AMSR2'
 SAR_BASE    = '/dmidata/projects/asip-cms/sentinel1'
-BASE_OUTPUT = '/dmidata/projects/asip-cms/ninna_msc/output'
+# BASE_OUTPUT = '/dmidata/projects/asip-cms/ninna_msc/output'
+BASE_OUTPUT = '/home/nili/ninna_msc_output'
 LAND_SHP    = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/Code/lib/predict/arctic_shp/op_str_maps_circum_polar_40_EPSG3411.shp' 
 
 sys.path.append(CODE_DIR)
@@ -40,7 +41,7 @@ from lib.model.FusionNetASPP import FusionNetASPP
  
 ### Config ### 
 MODEL_NAME      = 'fusionnetaspp'
-POSTFIX         = '4'
+POSTFIX         = '5'
 YEARS           = [2022]
  
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -156,6 +157,7 @@ def save_prediction_nc(out_file, pred,
     """Save SIC prediction and masks as a NetCDF file with sparse GCP
     coordinates and model metadata in global attributes."""
     os.makedirs(os.path.dirname(out_file), exist_ok=True)
+    timestamp    = scene_id.split('_')[4]  # '20220101T020815'
 
     ds_out = xr.Dataset(
         {
@@ -177,6 +179,7 @@ def save_prediction_nc(out_file, pred,
             'model_epoch':  int(ckpt['epoch']),
             'val_rmse':     float(ckpt['val_rmse']),
             'val_mae':      float(ckpt['val_mae']),
+            'timestamp':    timestamp,
             'source_amsr2': amsr2_base,
             'source_sar':   scene_id + '.zip',
             'crs':          'EPSG:3411',

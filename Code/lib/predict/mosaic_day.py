@@ -1,8 +1,8 @@
 """
 mosaic_day.py
 -------------
-Takes all predicted SIC NetCDF files for a given day, mosaics them onto
-a common 2km EPSG:3411 grid using pyresample with the newest data on top,
+Takes all retrieved SIC NetCDF files for a given day, mosaics them onto
+a common 25km EPSG:3411 grid using pyresample and average overlapping pixels,
 plots the result and saves it as a NetCDF file.
 
 KD-tree resampling indices computed once per scene (only 1 variable to
@@ -28,14 +28,18 @@ from pyresample import geometry, kd_tree
 from pyresample.geometry import AreaDefinition
 from datetime import datetime
 from tqdm import tqdm
+import geopandas as gpd
+from NorthPolStere import NorthPolStere
+
+shp = gpd.read_file('/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/Code/lib/predict/arctic_shp/op_str_maps_circum_polar_40_EPSG3411.shp')
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DATE        = '2020/01/01'
-INPUT_BASE  = '/dmidata/projects/asip-cms/ninna_msc/output'
+INPUT_BASE  = '/home/nili/ninna_msc_output'
 OUTPUT_BASE = '/dmidata/projects/asip-cms/ninna_msc/output_mosaic'
 y, m, d     = DATE.split('/')
 
-REF_RES  = 2000
+REF_RES  = 25000
 REF_EXT  = 7_000_000
 REF_SIZE = int(2 * REF_EXT / REF_RES)
 
@@ -52,12 +56,12 @@ def extract_timestamp(path):
 
 pred_files = sorted(pred_files, key=extract_timestamp)
 print(f'Time range: {extract_timestamp(pred_files[0])} → {extract_timestamp(pred_files[-1])}')
-pred_files = pred_files[:4]
+# pred_files = pred_files[:4] # for testing — IGNORE
 
 # ── Target area ───────────────────────────────────────────────────────────────
 target_area = AreaDefinition(
-    area_id     = 'arctic_2km',
-    description = 'Arctic 2km EPSG:3411',
+    area_id     = 'arctic_25km',
+    description = 'Arctic 25km EPSG:3411',
     proj_id     = 'EPSG:3411',
     projection  = {'proj': 'stere', 'lat_0': 90, 'lat_ts': 70,
                    'lon_0': -45, 'x_0': 0, 'y_0': 0,
@@ -69,7 +73,8 @@ target_area = AreaDefinition(
 
 # ── Build mosaic — newest overwrites oldest ───────────────────────────────────
 print('Building SIC mosaic...')
-mosaic = np.full((REF_SIZE, REF_SIZE), np.nan, dtype=np.float32)
+mosaic_sum   = np.zeros((REF_SIZE, REF_SIZE), dtype=np.float32)
+mosaic_count = np.zeros((REF_SIZE, REF_SIZE), dtype=np.float32)
 
 errors = 0
 for pred_path in tqdm(pred_files, desc='Mosaicking'):
@@ -112,7 +117,7 @@ for pred_path in tqdm(pred_files, desc='Mosaicking'):
             kd_tree.get_neighbour_info(
                 source_swath,
                 target_area,
-                radius_of_influence=3000,
+                radius_of_influence=30000,
                 neighbours=30,
                 nprocs=1,
             )
@@ -125,20 +130,28 @@ for pred_path in tqdm(pred_files, desc='Mosaicking'):
             valid_output_index,
             index_array,
             distance_array=distance_array,
-            weight_funcs=lambda r: np.exp(-r**2 / (2 * 1500**2)),
+            weight_funcs=lambda r: np.exp(-r**2 / (2 * 12500**2)), #sigma 12.5 km
             fill_value=np.nan,
         )
 
         # Newest overwrites — simply replace valid pixels
         valid_new = ~np.isnan(resampled)
-        mosaic[valid_new] = resampled[valid_new]
+        mosaic_sum[valid_new] += resampled[valid_new]
+        mosaic_count[valid_new] += 1
 
     except Exception as e:
         tqdm.write(f'  Error {os.path.basename(pred_path)}: {e}')
         errors += 1
 
+# ── Average overlapping pixels ────────────────────────────────────────────────
+mosaic = np.full((REF_SIZE, REF_SIZE), np.nan, dtype=np.float32)
+valid  = mosaic_count > 0
+mosaic[valid] = mosaic_sum[valid] / mosaic_count[valid]
+
 n_used = len(pred_files) - errors
 print(f'Mosaic complete — {n_used} scenes used  {errors} errors')
+print(f'Overlap: max {mosaic_count.max():.0f} scenes per pixel  '
+      f'mean {mosaic_count[valid].mean():.2f}')
 
 # ── Crop to data extent ───────────────────────────────────────────────────────
 valid_mosaic   = ~np.isnan(mosaic)
@@ -194,7 +207,7 @@ print(f'Saved NetCDF → {out_nc}')
 cmap = plt.cm.Blues_r.copy()
 cmap.set_bad('none')
 
-proj = ccrs.NorthPolarStereo(central_longitude=0, true_scale_latitude=70)
+proj = NorthPolStere()
 fig, ax = plt.subplots(1, 1, figsize=(12, 12), subplot_kw={'projection': proj})
 ax.set_extent([-180, 180, 60, 90], crs=ccrs.PlateCarree())
 ax.set_facecolor('black')
@@ -204,10 +217,8 @@ ax.pcolormesh(lon_out, lat_out, mosaic_crop,
               cmap=cmap, vmin=0, vmax=100,
               shading='auto', zorder=4, alpha=1)
 
-land = NaturalEarthFeature('physical', 'land', '10m',
-                            facecolor='#c8c8a0', edgecolor='gray',
-                            linewidth=0.5)
-ax.add_feature(land, zorder=5)
+shp.plot(ax=ax, facecolor='#c8c8a0', edgecolor='gray',
+         linewidth=0.1, zorder=5)
 
 gl = ax.gridlines(draw_labels=True, linewidth=0.4, color='gray',
                   alpha=0.5, linestyle='--')

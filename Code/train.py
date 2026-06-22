@@ -259,23 +259,23 @@ if os.path.exists(best_ckpt_path):
     best_val_loss = ckpoint['val_loss']
     # start_epoch = ckpoint['epoch'] + 1
 
-    # Compute what the lr should be at this epoch based on milestones
-    n_milestones_passed = sum(1 for m in MILESTONES if m <= ckpoint['epoch'])
-    current_lr = LEARNING_RATE * (GAMMA ** n_milestones_passed)
+    # # Compute what the lr should be at this epoch based on milestones
+    # n_milestones_passed = sum(1 for m in MILESTONES if m <= ckpoint['epoch'])
+    # current_lr = LEARNING_RATE * (GAMMA ** n_milestones_passed)
 
-    for pg in optimizer.param_groups:
-        pg['lr']         = current_lr
-        pg['initial_lr'] = LEARNING_RATE
+    # for pg in optimizer.param_groups:
+    #     pg['lr']         = current_lr
+    #     pg['initial_lr'] = LEARNING_RATE
 
-    # Rebuild scheduler — set last_epoch so next milestones fire correctly
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(
-        optimizer, milestones=MILESTONES, gamma=GAMMA,
-        last_epoch=ckpoint['epoch'])
+    # # Rebuild scheduler — set last_epoch so next milestones fire correctly
+    # scheduler = torch.optim.lr_scheduler.MultiStepLR(
+    #     optimizer, milestones=MILESTONES, gamma=GAMMA,
+    #     last_epoch=ckpoint['epoch'])
 
-    print(f"Resumed from epoch {ckpoint['epoch']}  "
-          f"val_loss={best_val_loss:.4f}  "
-          f"lr={current_lr:.2e}  "
-          f"milestones_passed={n_milestones_passed}")
+    # print(f"Resumed from epoch {ckpoint['epoch']}  "
+    #       f"val_loss={best_val_loss:.4f}  "
+    #       f"lr={current_lr:.2e}  "
+    #       f"milestones_passed={n_milestones_passed}")
 
     # print(f"Resumed from epoch {ckpoint['epoch']} with val_loss={best_val_loss:.4f}")
 else:
@@ -292,6 +292,23 @@ if os.path.exists(history_path):
 
     # np.save(history_path, history)
     start_epoch = len(history['train_loss'])  
+
+    # Compute what the lr should be at this epoch based on milestones
+    n_milestones_passed = sum(1 for m in MILESTONES if m <= start_epoch)
+    current_lr = LEARNING_RATE * (GAMMA ** n_milestones_passed)
+
+    for pg in optimizer.param_groups:
+        pg['lr']         = current_lr
+        pg['initial_lr'] = LEARNING_RATE
+    # Rebuild scheduler — set last_epoch so next milestones fire correctly
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer, milestones=MILESTONES, gamma=GAMMA,
+        last_epoch=start_epoch)
+
+    print(f"Resumed from epoch {start_epoch}  "
+          f"val_loss={best_val_loss:.4f}  "
+          f"lr={current_lr:.2e}  "
+          f"milestones_passed={n_milestones_passed}")
     print(f"Loaded existing training history with {len(history['train_loss'])} epochs")
 else:
     history = {'train_loss': [], 'val_loss': [], 'val_rmse': [], 'val_mae': []}

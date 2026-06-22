@@ -14,19 +14,35 @@ FUSIONNETASPP output
 '2' = with L1 loss
 '3' = with L1 loss and 128 features
 '4' = new learning rate scheduler at [100, 150, 200]
+'5' = same as 4 but nicer looking
 
 DIFFUSION output
 something_'mdl.name'_'postfix' = uses the above output as condition
 
 
 TODO
-- Set up script that runs over the validation years and save netcdf with coordinates and SIC
-    - Fix edges of predictions - invalid first and last 4
-- Clip and collect images to full arctic
+- DONE! Set up script that runs over the validation years and save netcdf with coordinates and SIC 
+- Clip and collect images to full arctic (overlapping images should be averaged [best])
 - Validation (!)
 
-- Fix resampling of swaths to 2 km grid
-- Predict full pan-arctic area
+- Touch upon uncertainties
+    - What could have been done (research)
+
+
+
+
+Validation:
+- Load dataset in (på samme måde som Tore)
+- Save as zarr (på samme måde som Tore)
+Notebook:
+"Geographical dist of err"
+- Årlig rødt/hvidt -> kan gøres, men kun 3 år (validt?) + mister en satellit så store usikkerheder
+"comparison with landsat"
+- Inkluder mit dataset
+- 
+
+
+
 
 
 NOTES
@@ -34,8 +50,3 @@ NOTES
 
 
 
-FOR SUMAN - TODO!
-- Find østkyst Grønland sentinel1 swath
-- Find matching AMSR2 swath
-- Predict + gem i georeference file
--> Tore
