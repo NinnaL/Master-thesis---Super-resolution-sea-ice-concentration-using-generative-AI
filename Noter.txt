@@ -20,26 +20,15 @@ DIFFUSION output
 something_'mdl.name'_'postfix' = uses the above output as condition
 
 
+
 TODO
-- DONE! Set up script that runs over the validation years and save netcdf with coordinates and SIC 
-- Clip and collect images to full arctic (overlapping images should be averaged [best])
-- Validation (!)
-
-- Touch upon uncertainties
-    - What could have been done (research)
+- Wait for 2020 and 2021
+- run 'mosaic day'
+- run 'generate_daily_25_km'
+- run 'statistics'
 
 
 
-
-Validation:
-- Load dataset in (på samme måde som Tore)
-- Save as zarr (på samme måde som Tore)
-Notebook:
-"Geographical dist of err"
-- Årlig rødt/hvidt -> kan gøres, men kun 3 år (validt?) + mister en satellit så store usikkerheder
-"comparison with landsat"
-- Inkluder mit dataset
-- 
 
 
 
@@ -47,6 +36,11 @@ Notebook:
 
 NOTES
 - get calibrated uncertainty -> should be evaluated with CRPS or reliability diagrams
+- Touch upon uncertainties
+    - What could have been done (research)
 
 
+- Generative AI 
+    - deep ensembles (NLL som loss)
+    - 
 

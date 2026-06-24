@@ -18,6 +18,7 @@ import json
 import argparse
 import functools
 import itertools
+import time
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -35,7 +36,7 @@ import matplotlib.colors as mcolors
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 
-postfix = '4'
+postfix = '5'
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 CODE_DIR    = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/Code'
@@ -45,11 +46,11 @@ OUTPUT_DIR   = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-
 
 # ── Training config ───────────────────────────────────────────────────────────
 N_EPOCHS           = 500
-BATCH_SIZE         = 32
-NUM_WORKERS        = 4
+BATCH_SIZE         = 128
+NUM_WORKERS        = 8
 LR                 = 5e-4
-ACCUMULATION_STEPS = 4
-SIGMA              = 25
+ACCUMULATION_STEPS = 1
+SIGMA              = 5
 MILESTONES         = [100, 200, 300, 400, 450]
 EMA_DECAY          = 0.999
 
@@ -64,7 +65,6 @@ sys.path.insert(0, CODE_DIR)
 from lib.model.diffusion_model import (
     ScoreNet,
     marginal_prob_std, diffusion_coeff,
-    SIGMA, SIC_SENTINEL_MIN,
     valid_mask, prepare_sic, prepare_cond,
     Euler_Maruyama_sampler, EMA,
 )
@@ -100,8 +100,6 @@ def masked_loss_fn(model, x, y, marginal_prob_std, eps=1e-5):
     """
     Score-matching loss with sentinel masking and SNR weighting.
       - Only valid SIC pixels [0,100] contribute to the loss
-      - SNR weight 1/(std²+0.1) upweights low-noise timesteps that
-        most determine output sharpness and fine ice-edge detail
     """
     mask = valid_mask(x)
     x    = prepare_sic(x)
@@ -114,8 +112,7 @@ def masked_loss_fn(model, x, y, marginal_prob_std, eps=1e-5):
  
     score      = model(perturbed_x, t=random_t, y=y)
     loss       = (score * std[:, None, None, None] + z) ** 2
-    snr_weight = 1.0 / (std[:, None, None, None] ** 2 + 0.01)  # add small constant to avoid division by zero for very low noise levels
-    loss       = loss * snr_weight * mask.float()
+    loss       = loss * mask.float()
     loss       = torch.sum(loss, dim=(1,2,3)) / torch.sum(mask, dim=(1,2,3)).clamp(min=1)
     return torch.mean(loss)
 
@@ -152,12 +149,12 @@ val_dataset   = AMSR2Dataset(CACHE_DIR, split='val')
 
 train_loader = DataLoader(
     train_dataset, batch_size=BATCH_SIZE, shuffle=True,
-    num_workers=NUM_WORKERS, pin_memory=False,
+    num_workers=NUM_WORKERS, pin_memory=True,
     persistent_workers=True, collate_fn=collate_pad_to_max,
 )
 val_loader = DataLoader(
     val_dataset, batch_size=BATCH_SIZE, shuffle=False,
-    num_workers=NUM_WORKERS, pin_memory=False,
+    num_workers=NUM_WORKERS, pin_memory=True,
     persistent_workers=True, collate_fn=collate_pad_to_max,
 )
 print(f'Train: {len(train_dataset)} samples  Val: {len(val_dataset)} samples')
@@ -166,10 +163,12 @@ print(f'Train: {len(train_dataset)} samples  Val: {len(val_dataset)} samples')
 # ── ScoreNet + optimizer + EMA ──────────────────────────────────────────────────
 score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
 score_model = score_model.to(device)
+ema = EMA(score_model.module, decay=EMA_DECAY)
+score_model = torch.compile(score_model)
 
 optimizer  = Adam(score_model.parameters(), lr=LR)
 scheduler  = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=MILESTONES, gamma=0.5)
-ema = EMA(score_model.module, decay=EMA_DECAY)
+
 start_epoch = 0
 best_val = float('inf')
 
@@ -211,6 +210,7 @@ if not args.predict:
     optimizer.zero_grad()
 
     for epoch in range(start_epoch, start_epoch + N_EPOCHS):
+        start_time = time.time()
         # Training
         score_model.train()
         avg_loss  = 0.
@@ -282,12 +282,14 @@ if not args.predict:
                     ema_val_items += sic.shape[0]
         epoch_ema_val_loss = ema_val_loss / max(ema_val_items, 1)
         score_model.load_state_dict(train_state)  # restore training weights
+
+        epoch_time = time.time() - start_time
         
         scheduler.step()
         current_lr = optimizer.param_groups[0]['lr']
         print(f'Epoch {epoch:>4}  train={epoch_train_loss:.5f}  '
               f'val={epoch_val_loss:.5f}  ema_val={epoch_ema_val_loss:.5f}  '
-              f'lr={current_lr:.2e}')
+              f'lr={current_lr:.2e}  time={epoch_time:>7.1f}s')
         
         # ── Save ──────────────────────────────────────────────────────────────
         ckpt_dict = {

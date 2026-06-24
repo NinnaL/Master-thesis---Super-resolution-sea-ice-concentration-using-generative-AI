@@ -42,7 +42,7 @@ from lib.model.FusionNetASPP import FusionNetASPP
 ### Config ### 
 MODEL_NAME      = 'fusionnetaspp'
 POSTFIX         = '5'
-YEARS           = [2022]
+YEARS           = [2020]
  
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Using device: {device}')

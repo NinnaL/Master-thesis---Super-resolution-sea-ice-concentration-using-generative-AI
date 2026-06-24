@@ -31,6 +31,7 @@ Key design decisions:
 
 Outputs (all written to OUTPUT_DIR):
     best_model_{postfix}.pth        — best checkpoint by val loss
+    ckpt_{postfix}.pth              — latest checkpoint for resuming
     training_history_{postfix}.npy  — loss/rmse/mae per epoch
     training_curves_{postfix}.png   — training curve plots
     sample_prediction_{postfix}.png — target vs prediction vs error
@@ -136,6 +137,7 @@ OUTPUT_DIR = os.path.join(BASE_OUTPUT, model.name.lower())
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 best_ckpt_path = os.path.join(OUTPUT_DIR, f'best_model_{postfix}.pth')
+last_ckpt_path = os.path.join(OUTPUT_DIR, f'ckpt_{postfix}.pth')
 history_path = os.path.join(OUTPUT_DIR, f'training_history_{postfix}.npy')
 
 
@@ -250,48 +252,14 @@ def validate_epoch(model, dataloader, criterion, device):
     return total_loss / n, total_rmse / n, total_mae / n
 
 ### Resume from checkpoint if exists ###
-if os.path.exists(best_ckpt_path):
-    print(f'Resuming from checkpoint: {best_ckpt_path}')
-    ckpoint = torch.load(best_ckpt_path, map_location=device, weights_only=False)
+if os.path.exists(last_ckpt_path):
+    print(f'Resuming from checkpoint: {last_ckpt_path}')
+    ckpoint = torch.load(last_ckpt_path, map_location=device, weights_only=False)
     model.load_state_dict(ckpoint['model_state_dict'])
     optimizer.load_state_dict(ckpoint['optimizer_state_dict'])
+    start_epoch = ckpoint['epoch'] + 1
     # scheduler.load_state_dict(ckpoint['scheduler'])
     best_val_loss = ckpoint['val_loss']
-    # start_epoch = ckpoint['epoch'] + 1
-
-    # # Compute what the lr should be at this epoch based on milestones
-    # n_milestones_passed = sum(1 for m in MILESTONES if m <= ckpoint['epoch'])
-    # current_lr = LEARNING_RATE * (GAMMA ** n_milestones_passed)
-
-    # for pg in optimizer.param_groups:
-    #     pg['lr']         = current_lr
-    #     pg['initial_lr'] = LEARNING_RATE
-
-    # # Rebuild scheduler — set last_epoch so next milestones fire correctly
-    # scheduler = torch.optim.lr_scheduler.MultiStepLR(
-    #     optimizer, milestones=MILESTONES, gamma=GAMMA,
-    #     last_epoch=ckpoint['epoch'])
-
-    # print(f"Resumed from epoch {ckpoint['epoch']}  "
-    #       f"val_loss={best_val_loss:.4f}  "
-    #       f"lr={current_lr:.2e}  "
-    #       f"milestones_passed={n_milestones_passed}")
-
-    # print(f"Resumed from epoch {ckpoint['epoch']} with val_loss={best_val_loss:.4f}")
-else:
-    best_val_loss = float('inf')
-    start_epoch = 0
-
-
-### Load existing history if exists ###
-if os.path.exists(history_path):
-    history = np.load(history_path, allow_pickle=True).item()
-
-    # for k in history:
-    #     history[k] = history[k][:ckpoint['epoch']]
-
-    # np.save(history_path, history)
-    start_epoch = len(history['train_loss'])  
 
     # Compute what the lr should be at this epoch based on milestones
     n_milestones_passed = sum(1 for m in MILESTONES if m <= start_epoch)
@@ -305,10 +273,24 @@ if os.path.exists(history_path):
         optimizer, milestones=MILESTONES, gamma=GAMMA,
         last_epoch=start_epoch)
 
-    print(f"Resumed from epoch {start_epoch}  "
-          f"val_loss={best_val_loss:.4f}  "
-          f"lr={current_lr:.2e}  "
-          f"milestones_passed={n_milestones_passed}")
+else:
+    best_val_loss = float('inf')
+    start_epoch = 0
+
+### Load best ckpoint if exists ###
+if os.path.exists(best_ckpt_path):
+    best_ckpt = torch.load(best_ckpt_path, map_location=device, weights_only=False)
+    best_val_loss = best_ckpt['val_loss']
+    print(f'Best val_loss so far: {best_val_loss:.4f} (epoch {best_ckpt["epoch"]})')
+
+### Load existing history if exists ###
+if os.path.exists(history_path):
+    history = np.load(history_path, allow_pickle=True).item()
+
+    # for k in history:
+    #     history[k] = history[k][:ckpoint['epoch']]
+
+    # np.save(history_path, history)
     print(f"Loaded existing training history with {len(history['train_loss'])} epochs")
 else:
     history = {'train_loss': [], 'val_loss': [], 'val_rmse': [], 'val_mae': []}
@@ -364,6 +346,28 @@ for epoch in range(start_epoch, NUM_EPOCHS + 1):
             'collate':              'pad_to_max',
         }, best_ckpt_path)
         print(f"         ↳ saved best model (val_loss={val_loss:.4f})")
+    
+    # Save latest checkpoint — always overwrite, used for resuming
+    torch.save({
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "val_loss": val_loss,
+        "val_rmse": val_rmse,
+        "val_mae": val_mae,
+        "model_name": model.name,
+        "in_channels": AMSR2_IN_CHANNELS,
+        "features": FEATURES,
+        'num_epochs':           NUM_EPOCHS,
+        'batch_size':           BATCH_SIZE,
+        'learning_rate':        LEARNING_RATE,
+        'weight_decay':         WEIGHT_DECAY,
+        'grad_clip_norm':       GRAD_CLIP_NORM,
+        'seed':                 SEED,
+        'scheduler':            scheduler.state_dict(),
+        'cache_dir':            CACHE_DIR,
+        'collate':              'pad_to_max',
+    }, last_ckpt_path)
  
 print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
 

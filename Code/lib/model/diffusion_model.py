@@ -20,7 +20,7 @@ import torch.nn.functional as F
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 SIC_SENTINEL_MIN = 254   # 254=missing, 255=land
-SIGMA            = 25.0  # must match training script
+SIGMA            = 5.0  # must match training script
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -198,7 +198,7 @@ def prepare_sic(x):
 def Euler_Maruyama_sampler(score_model, marginal_prob_std_fn, diffusion_coeff_fn,
                             y, batch_size, num_steps=500, device='cuda', eps=1e-3,
                             verbose=True):
-    """y in [0,100]. Returns samples in [0,100]."""
+    """y in [0,1]. Returns samples in [0,1]."""
     from tqdm import tqdm
     t          = torch.ones(batch_size, device=device)
     init_x     = (torch.randn(batch_size, 1, y.shape[-2], y.shape[-1], device=device)
@@ -263,8 +263,6 @@ def load_models(code_dir, fusion_ckpt_base, postfix, diff_ckpt, best_ckpt, devic
     else:
         score_model = inner_model
 
-    # infer_path = best_ckpt if os.path.exists(best_ckpt) else diff_ckpt
-    # ckpt       = torch.load(infer_path, map_location=device, weights_only=True)
     infer_path = best_ckpt if os.path.exists(best_ckpt) else diff_ckpt
 
     if not os.path.exists(infer_path):
@@ -278,17 +276,21 @@ def load_models(code_dir, fusion_ckpt_base, postfix, diff_ckpt, best_ckpt, devic
     ckpt = torch.load(infer_path, map_location=device, weights_only=True)
 
     if 'ema_state_dict' in ckpt:
+        from collections import OrderedDict
+        ema_sd = OrderedDict(
+            (k.replace('module.', '', 1).replace('_orig_mod.', '', 1), v)
+            for k, v in ckpt['ema_state_dict'].items()
+        )
         inner = score_model.module if hasattr(score_model, 'module') else score_model
-        inner.load_state_dict(ckpt['ema_state_dict'])
+        inner.load_state_dict(ema_sd)
         print(f'ScoreNet: loaded EMA weights from {infer_path}')
     else:
         from collections import OrderedDict
         state_dict = ckpt.get('state_dict', ckpt)
-        # Strip 'module.' prefix if checkpoint was saved with DataParallel
-        # but we're loading into a plain ScoreNet (CPU)
         if not hasattr(score_model, 'module'):
             state_dict = OrderedDict(
-                (k.replace('module.', '', 1), v) for k, v in state_dict.items()
+                (k.replace('module.', '', 1).replace('_orig_mod.', '', 1), v)
+                for k, v in state_dict.items()
             )
         score_model.load_state_dict(state_dict)
         print(f'ScoreNet: loaded regular weights from {infer_path}')
