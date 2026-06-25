@@ -328,10 +328,22 @@ ckpt       = torch.load(infer_path, map_location=device, weights_only=True)
  
 # Load EMA shadow weights for inference
 if 'ema_state_dict' in ckpt:
-    score_model.module.load_state_dict(ckpt['ema_state_dict'])
+    from collections import OrderedDict
+    ema_sd = OrderedDict(
+        (k.replace('module.', '', 1).replace('_orig_mod.', '', 1), v)
+        for k, v in ckpt['ema_state_dict'].items()
+    )
+    inner = score_model.module if hasattr(score_model, 'module') else score_model
+    inner.load_state_dict(ema_sd)
     print(f'Using EMA weights from {infer_path}')
 else:
-    score_model.load_state_dict(ckpt.get('state_dict', ckpt))
+    from collections import OrderedDict
+    sd = OrderedDict(
+        (k.replace('module.', '', 1).replace('_orig_mod.', '', 1), v)
+        for k, v in ckpt.get('state_dict', ckpt).items()
+    )
+    inner = score_model.module if hasattr(score_model, 'module') else score_model
+    inner.load_state_dict(sd)
     print(f'Using regular weights from {infer_path}')
  
 score_model.eval()

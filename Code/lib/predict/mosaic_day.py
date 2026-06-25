@@ -5,8 +5,7 @@ Takes all retrieved SIC NetCDF files for a given day, mosaics them onto
 a common 25km EPSG:3411 grid using pyresample and average overlapping pixels,
 plots the result and saves it as a NetCDF file.
 
-KD-tree resampling indices computed once per scene (only 1 variable to
-resample vs 14 for AMSR2 mosaic) — fast and clean.
+Parallelised: each scene's KD-tree resampling runs in a separate process.
 
 Author: Ninna Juul Ligaard, MSc thesis, DMI/DTU, 2026
 

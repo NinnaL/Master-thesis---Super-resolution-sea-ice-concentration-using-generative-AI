@@ -269,8 +269,8 @@ def multiprocess(l3_ncs, l3_swath_def, common_swath_def, n_processes=8):
 
 
 if __name__ == '__main__':
-    start_date = datetime(2020, 1, 1)
-    end_date = datetime(2020, 12, 31)  
+    start_date = datetime(2021, 1, 1)
+    end_date = datetime(2021, 12, 31)  
 
     all_ninna_sic_files = sorted(glob.glob(f'{INPUT_DIR}/*/*/SIC_mosaic_*.nc'))
     landsat_ncs = sorted(glob.glob(f'{LANDSAT_DIR}/*.nc'))
