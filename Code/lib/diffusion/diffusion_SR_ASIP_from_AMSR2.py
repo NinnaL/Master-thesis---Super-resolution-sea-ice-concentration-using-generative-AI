@@ -164,7 +164,7 @@ print(f'Train: {len(train_dataset)} samples  Val: {len(val_dataset)} samples')
 score_model = torch.nn.DataParallel(ScoreNet(marginal_prob_std=marginal_prob_std_fn))
 score_model = score_model.to(device)
 ema = EMA(score_model.module, decay=EMA_DECAY)
-score_model = torch.compile(score_model)
+# score_model = torch.compile(score_model)
 
 optimizer  = Adam(score_model.parameters(), lr=LR)
 scheduler  = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=MILESTONES, gamma=0.5)
@@ -178,9 +178,19 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 if os.path.exists(DIFF_CKPT):
     ckpt = torch.load(DIFF_CKPT, map_location=device, weights_only=True)
     if isinstance(ckpt, dict) and 'state_dict' in ckpt:
-        score_model.load_state_dict(ckpt['state_dict'])
+        from collections import OrderedDict
+        # remove _orig_mod. prefix left by tourch.compile
+        state_dict = OrderedDict(
+            (k.replace('_orig_mod.', '', 1), v) for k, v in ckpt['state_dict'].items()
+        )
+        score_model.load_state_dict(state_dict)
         if 'ema_state_dict' in ckpt:
-            ema.load_state_dict(ckpt['ema_state_dict'])
+            ema_sd = OrderedDict(
+                (k.replace('module.', '', 1).replace('_orig_mod.', '', 1), v)
+                for k, v in ckpt['ema_state_dict'].items()
+            )
+            ema.load_state_dict(ema_sd)
+            
         start_epoch = ckpt.get('epoch', 0) + 1
         best_val    = ckpt.get('best_val_loss', float('inf'))
         for _ in range(start_epoch):
