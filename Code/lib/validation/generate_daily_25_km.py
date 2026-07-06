@@ -183,7 +183,7 @@ def process(nc, l3_swath_def, common_swath_def):
     else:
         mpf = np.full_like(asip_sic, np.nan)
 
-    # Fetching and resampling NINNA data
+    # Fetching and resampling NINNA data - already on 25 km grid, so no resampling needed
     if DATE.year in [2020, 2021, 2022]:
         data_path = f'{INPUT_DIR}/{DATE.year}/{DATE.month:02d}/SIC_mosaic_{DATE.strftime("%Y%m%d")}.nc'
         if os.path.exists(data_path):
@@ -269,8 +269,8 @@ def multiprocess(l3_ncs, l3_swath_def, common_swath_def, n_processes=8):
 
 
 if __name__ == '__main__':
-    start_date = datetime(2021, 1, 1)
-    end_date = datetime(2021, 12, 31)  
+    start_date = datetime(2020, 1, 1)
+    end_date = datetime(2022, 12, 31)  
 
     all_ninna_sic_files = sorted(glob.glob(f'{INPUT_DIR}/*/*/SIC_mosaic_*.nc'))
     landsat_ncs = sorted(glob.glob(f'{LANDSAT_DIR}/*.nc'))

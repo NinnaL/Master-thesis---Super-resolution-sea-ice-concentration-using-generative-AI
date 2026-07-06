@@ -33,7 +33,7 @@ CKPT_DIR    = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-i
 AMSR2_DIR   = '/dmidata/projects/asip-cms/tests/new_input_ncs/AMSR2'
 SAR_BASE    = '/dmidata/projects/asip-cms/sentinel1'
 # BASE_OUTPUT = '/dmidata/projects/asip-cms/ninna_msc/output'
-BASE_OUTPUT = '/home/nili/ninna_msc_output'
+BASE_OUTPUT = '/home/nili/ninna_msc_output_2km'
 LAND_SHP    = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/Code/lib/predict/arctic_shp/op_str_maps_circum_polar_40_EPSG3411.shp' 
 
 sys.path.append(CODE_DIR)
