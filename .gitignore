@@ -3,3 +3,4 @@
 *.shp
 Code/lib/predict/arctic_shp/
 outputs/
+anim_frames/
