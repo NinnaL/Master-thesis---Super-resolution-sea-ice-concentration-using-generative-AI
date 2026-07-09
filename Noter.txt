@@ -22,10 +22,7 @@ something_'mdl.name'_'postfix' = uses the above output as condition
 
 
 TODO
-- Wait for 2020 and 2021
-- run 'mosaic day'
-- run 'generate_daily_25_km'
-- run 'statistics'
+IDX: 17, 23, 31
 
 
 
