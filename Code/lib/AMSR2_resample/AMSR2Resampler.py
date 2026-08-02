@@ -1,197 +1,232 @@
-import warnings
-
-from requests import get
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", category=FutureWarning)
-
 import os
-import time
-import h5py
+os.environ.setdefault('HDF5_USE_FILE_LOCKING', 'FALSE')
 import logging
+import h5py
 import satpy
 import numpy as np
 import xarray as xr
-import numpy as np
-from osgeo import ogr, osr
+import pyproj
 from pyresample import kd_tree, utils
-from pyresample.geometry import SwathDefinition
-from datetime import datetime, timedelta
-import pandas as pd
+from pyresample.geometry import SwathDefinition, AreaDefinition
+from datetime import datetime
 
-os.environ['HDF5_USE_FILE_LOCKING']='FALSE'
+LOG = logging.getLogger(__name__)
 
-class AMSR2Resampler():
+
+class AMSR2Resampler:
     """
-    Class to resample AMSR2 data to a specified grid. The class takes in a list of AMSR2 files, an output directory, a target grid definition, and an optional hemisphere parameter (default is 'N' for Northern Hemisphere). The resampling process involves reading the AMSR2 data, defining the target grid, and using the pyresample library to perform the resampling. The resampled data is then saved to the specified output directory.""
-    
-    Elements denoted TWU has been copied from https://gitlab.dmi.dk/remote-sensing/twu/asip/asip_opr/-/blob/dev/l2_prod/amsr2_matchup/ResampleAMSR2.py?ref_type=heads 
+    Resamples a single AMSR2 L1b .h5 swath directly onto a fixed target_grid
+    (a pyresample AreaDefinition), with no timestamp matching, intersection
+    checks, or multi-swath blending — one file in, one resampled file out.
     """
-    def __init__(self, amsr2_file, output_dir, target_grid, hemisphere = 'N'):
 
-        self.amsr2_file = amsr2_file
-        self.beam_widths = {'btemp_6.9h': [35, 62],
-                            'btemp_6.9v': [35, 62],
-                            'btemp_7.3h': [35, 62],
-                            'btemp_7.3v': [35, 62],
-                            'btemp_10.7h': [24, 42],
-                            'btemp_10.7v': [24, 42],
-                            'btemp_18.7h': [24, 42],
-                            'btemp_18.7v': [24, 42],
-                            'btemp_23.8h': [15, 26],
-                            'btemp_23.8v': [15, 26],
-                            'btemp_36.5h': [7, 12],
-                            'btemp_36.5v': [7, 12],
-                            'btemp_89.0ah': [3, 5],
-                            'btemp_89.0bh': [3, 5],
-                            'btemp_89.0av': [3, 5],
-                            'btemp_89.0bv': [3, 5]}
-        self.chs = list(self.beam_widths.keys())
-        self.combined_89_beam_widths = {'btemp_89.0h': [3, 5],
-                                        'btemp_89.0v': [3, 5]}
-        self.combined_89_chs = list(self.combined_89_beam_widths.keys())
+    BEAM_WIDTHS = {
+        'btemp_6.9h':  [35, 62], 'btemp_6.9v':  [35, 62],
+        'btemp_7.3h':  [35, 62], 'btemp_7.3v':  [35, 62],
+        'btemp_10.7h': [24, 42], 'btemp_10.7v': [24, 42],
+        'btemp_18.7h': [24, 42], 'btemp_18.7v': [24, 42],
+        'btemp_23.8h': [15, 26], 'btemp_23.8v': [15, 26],
+        'btemp_36.5h': [7, 12],  'btemp_36.5v': [7, 12],
+        'btemp_89.0ah': [3, 5], 'btemp_89.0bh': [3, 5],
+        'btemp_89.0av': [3, 5], 'btemp_89.0bv': [3, 5],
+    }
+    CHS = list(BEAM_WIDTHS.keys())
+    COMBINED_89_BEAM_WIDTHS = {'btemp_89.0h': [3, 5], 'btemp_89.0v': [3, 5]}
+    COMBINED_89_CHS = list(COMBINED_89_BEAM_WIDTHS.keys())
 
-        self.lat_limits = [40, 90] if hemisphere == 'N' else ([-90, -40] if hemisphere == 'S' else None)
-        self.ESPG = 3411 if hemisphere == 'N' else (3412 if hemisphere == 'S' else 6933) # Arctic Polar Stereographic, Antarctic Polar Stereographic, EASE-Grid 2.0 Global
+    SUBAREA_MARGIN = 150 # km margin around the AMSR2 swath footprint to avoid edge effects during resampling
 
-        self.amsr2_file = self.filter_corrupted_h5s(amsr2_file)
-
-        self.output_dir = output_dir
+    def __init__(self, amsr2_file, output_dir, target_grid, hemisphere=None):
+        self.amsr2_file = str(amsr2_file)
+        self.output_dir = str(output_dir)
         self.target_grid = target_grid
+        self.lat_limits = (
+            [60, 90] if hemisphere == 'N' else
+            [-90, -60] if hemisphere == 'S' else
+            None
+        )
 
-    def filter_corrupted_h5s(self, amsr2_file):
+        self._check_corrupted()
+        self.ds_combined = None
+
+    def _check_corrupted(self):
         """
-        Occasionally AMSR2 L1b .h5-files will contain invalid data. 
-        Assuming invalid pixels are given the value 2¹⁶, all AMSR2 swaths with invalid data north of 40 degrees North are discarded.  
-        From TWU
+        Occasionally AMSR2 L1b .h5 files contain invalid data (2**16-1 sentinel).
+        Raises ValueError if invalid pixels are found north/south of the hemisphere limit.
         """
+        with h5py.File(self.amsr2_file, 'r', locking=False) as f:
+            bt89 = f['Brightness Temperature (89.0GHz-A,H)'][:]
+            lats89 = f['Latitude of Observation Point for 89A'][:]
 
-        with h5py.File(amsr2_file, locking=False) as f:
-            if not (f['Brightness Temperature (89.0GHz-A,H)'][f['Latitude of Observation Point for 89A'][:] > 40] == 2**16 - 1).any():
-                return amsr2_file
-            else:
-                print(f'Discarded: {amsr2_file}')
+        if self.lat_limits is not None:
+            mask = (lats89 > self.lat_limits[0]) if self.lat_limits[0] >= 0 else (lats89 < self.lat_limits[1])
+        else:
+            mask = np.ones_like(lats89, dtype=bool)
 
-        return None
+        if (bt89[mask] == 2**16 - 1).any():
+            raise ValueError(f"Corrupted AMSR2 file detected: {self.amsr2_file}")
 
-    def _mask_to_lat_limits(self, ds_ch):
-        lons, lats = ds_ch.area.get_lonlats()
-        lats_np = lats.compute() if hasattr(lats, 'compute') else lats
-        mask = (lats_np < self.lat_limits[0]) | (lats_np > self.lat_limits[1])
-        masked = ds_ch.values.copy()
-        masked[mask] = np.nan
-        return masked 
-    
-    def get_combined_89(self, ds):
+    def _get_combined_89(self, ds):
+        """Combine the 89.0GHz-A and 89.0GHz-B sub-beams into single btemp_89.0h/v channels."""
+        out = {}
+        for pol in ['v', 'h']:
+            name   = f'btemp_89.0{pol}'
+            name_a = f'btemp_89.0a{pol}'
+            name_b = f'btemp_89.0b{pol}'
+
+            lons_a, lats_a = ds[name_a].area.get_lonlats()
+            lons_b, lats_b = ds[name_b].area.get_lonlats()
+
+            shape = np.array(ds[name_a].values.shape) * np.array([1, 2])
+            bt89 = np.empty(shape, dtype=ds[name_a].values.dtype)
+            lats = np.empty_like(bt89)
+            lons = np.empty_like(bt89)
+
+            bt89[:, 0::2] = ds[name_a].values
+            bt89[:, 1::2] = ds[name_b].values
+            lons[:, 0::2] = lons_a.compute()
+            lons[:, 1::2] = lons_b.compute()
+            lats[:, 0::2] = lats_a.compute()
+            lats[:, 1::2] = lats_b.compute()
+
+            attrs = dict(ds[name_a].attrs)
+            attrs['name'] = name
+            attrs['area'] = SwathDefinition(
+                lons=xr.DataArray(lons, dims=['y', 'x']),
+                lats=xr.DataArray(lats, dims=['y', 'x']),
+            )
+            out[name] = xr.DataArray(bt89, attrs=attrs)
+
+        return xr.Dataset(out)
+
+    def _get_target_subarea(self, scn, reference_channel='btemp_36.5v', margin=None):
         """
-        Takes a complete AMSR2 satpy dataset and returns a new ds, where the 89.0Pa and 89.0Pb have been combined.
-        Taken directly from John Lavelle's old AMSR2 matchup scripts. 
-        From TWU
+        Compute a small AreaDefinition covering just the swath's footprint
+        within target_grid, instead of resampling onto the full grid. 
+ 
+        Returns (sub_area, row0, col0) where row0/col0 are the sub-area's
+        offset within the full target_grid (needed to place results back).
         """
-        def get():
-            for pol in ['v', 'h']:
-                name = 'btemp_89.0{p}'.format(p=pol)
-                name_a = 'btemp_89.0a{p}'.format(p=pol)
-                name_b = 'btemp_89.0b{p}'.format(p=pol)
+        if margin is None:
+            margin = self.SUBAREA_MARGIN
 
-                lons_a, lats_a = ds[name_a].area.get_lonlats()
-                lons_b, lats_b = ds[name_b].area.get_lonlats()
+        lons, lats = scn[reference_channel].area.get_lonlats()
+        lons, lats = np.asarray(lons), np.asarray(lats)
 
-                da89size = np.array(ds[name_a].values.shape) * np.array([1, 2])
-                bt89 = np.empty(da89size, dtype=ds[name_a].values.dtype)
-                lats = np.empty_like(bt89)
-                lons = np.empty_like(bt89)
+        proj = pyproj.Proj(self.target_grid.proj_dict)
+        x,y = proj(lons, lats)
 
-                bt89[:, 0::2] = ds[name_a].values
-                bt89[:, 1::2] = ds[name_b].values
-                lons[:, 0::2] = lons_a.compute()
-                lons[:, 1::2] = lons_b.compute()
-                lats[:, 0::2] = lats_a.compute()
-                lats[:, 1::2] = lats_b.compute()
+        margin_m = margin * 1000  # km -> m
+        x_min, x_max = np.nanmin(x) - margin_m, np.nanmax(x) + margin_m
+        y_min, y_max = np.nanmin(y) - margin_m, np.nanmax(y) + margin_m
 
-                lons = xr.DataArray(lons, dims=['y', 'x'])
-                lats = xr.DataArray(lats, dims=['y', 'x'])
+        ext = self.target_grid.area_extent #[x_min, y_min, x_max, y_max]
+        px = (ext[2]-ext[0]) / self.target_grid.width
+        py = (ext[3]-ext[1]) / self.target_grid.height
 
-                attrs = ds[name_a].attrs
-                attrs['shape'] = bt89.shape
-                attrs['name'] = name
-                attrs['area'] = SwathDefinition(lons=lons, lats=lats)
+        col0 = max(int((x_min - ext[0]) / px), 0)
+        col1 = min(int(np.ceil((x_max - ext[0]) / px)), self.target_grid.width)
+        row0 = max(int((ext[3]-y_max) / py), 0)
+        row1 = min(int(np.ceil((ext[3]-y_min) / py)), self.target_grid.height)
 
-                yield name, xr.DataArray(bt89, attrs=attrs)#, dims=('y', 'x'))
+        # guard against a degenerate (zero-size) sub-area, e.g. swath barely
+        if col1 <= col0 or row1 <= row0:
+            col1, row1 = col0 + 1, row0 + 1
+ 
+        sub_extent = [
+            ext[0] + col0 * px,
+            ext[3] - row1 * py,
+            ext[0] + col1 * px,
+            ext[3] - row0 * py,
+        ]
+        sub_area = AreaDefinition(
+            'sub', 'sub', 'sub', self.target_grid.proj_dict,
+            col1 - col0, row1 - row0, sub_extent
+        )
+        return sub_area, row0, col0
 
-        return xr.Dataset({name: da for name, da in get()})
-
-    def resample_amsr2(self, ds_ch, beam_widths, neighbours=30, nprocs=1, fill_value=None, reduce_data=False):
-        """
-        Resamples a single-channeled AMSR2 satpy dataset to the grid defined by target_swath_def.
-        From TWU
-        """
+    def _resample_channel(self, ds_ch, beam_widths, target_grid, neighbours=30, nprocs=1,
+                           fill_value=np.nan, reduce_data=True):
+        """Resample one AMSR2 channel onto target_grid. kd_tree resamples in ECEF
+        xyz space internally, so dateline-crossing swaths are handled correctly
+        without any manual lon/lat -> x/y conversion."""
         beam_width = float(1000 * np.array(beam_widths[ds_ch.attrs['name']]).mean())
         sigma = utils.fwhm2sigma(beam_width)
+
         res = kd_tree.resample_gauss(
-            ds_ch.area, 
-            self._mask_to_lat_limits(ds_ch).ravel(), 
-            self.target_grid, 
-            radius_of_influence=2*beam_width, 
+            ds_ch.area,
+            ds_ch.values.ravel(),
+            target_grid,
+            radius_of_influence=2 * beam_width,
             sigmas=sigma,
-            neighbours=neighbours, 
-            nprocs=nprocs, 
-            fill_value=fill_value if fill_value is not None else np.nan, 
-            reduce_data=reduce_data)
-
-        res = xr.DataArray(res)
+            neighbours=neighbours,
+            nprocs=nprocs,
+            fill_value=fill_value,
+            reduce_data=reduce_data,
+        )
+        res = xr.DataArray(res, dims=['y', 'x'])
         res.name = ds_ch.attrs['name']
-
         return res
-    
-    def set_attrs(self, ds):
-        """
-        Sets the attributes of an xarray dataset.
-        """
-        ds.attrs['instrument_name'] = "AMSR-2"
-        ds.attrs['platform_name'] = "GCOM-W"
-        ds.attrs['institution'] = "DMI"
-        ds.attrs['creation_date'] = datetime.now().strftime("%Y-%m-%d")
-        ds.attrs['contact'] = "nili@dmi.dk"
-        ds.attrs['description'] = "AMSR-2 Level 1b brightness temperatures resampled onto an upsampled ~2 km grid. "
-        ds.attrs['AMSR2_swaths'] = os.path.basename(self.amsr2_file)
 
-        return ds
-    
-    def get_encodings(self, ds):
-        """
-        Sets the encodings of an xarray dataset prior to the netCDF export.
-        """
-        encoding_Tb = {"least_significant_digit": 2, "zlib": True, "complevel": 6}
-        encodings = {v: encoding_Tb for v in ds.data_vars if 'btemp' in v}
+    def resample(self):
+        """Runs the resampling and stores the result in self.ds_combined."""
+        scn = satpy.Scene(reader=['amsr2_l1b'], filenames=[self.amsr2_file])
+        scn.load(self.CHS)
 
-        return encodings
-    
+        sub_area, row0, col0 = self._get_target_subarea(scn)
+
+        resampled = xr.merge(
+            self._resample_channel(scn[ch], self.BEAM_WIDTHS, target_grid=sub_area) for ch in self.CHS
+        )
+
+        scn_89 = self._get_combined_89(scn)
+        resampled_89 = xr.merge(
+            self._resample_channel(scn_89[ch], self.COMBINED_89_BEAM_WIDTHS, target_grid=sub_area)
+            for ch in self.COMBINED_89_CHS
+        )
+
+        ds_combined = xr.merge([resampled, resampled_89])
+        ds_combined = ds_combined.drop_vars(
+            ['btemp_89.0ah', 'btemp_89.0av', 'btemp_89.0bh', 'btemp_89.0bv'],
+            errors='ignore'
+        )
+
+        ds_combined.attrs.update({
+            'instrument_name': 'AMSR-2',
+            'platform_name': 'GCOM-W',
+            'institution': 'DMI',
+            'creation_date': datetime.now().strftime("%Y-%m-%d"),
+            'description': 'AMSR-2 L1b brightness temperatures resampled onto a fixed north-polar-stereographic grid.',
+            'source_file': os.path.basename(self.amsr2_file),
+            'crop_y0': int(row0),
+            'crop_x0': int(col0),
+            'full_shape': [int(self.target_grid.height), int(self.target_grid.width)],
+        })
+
+        self.ds_combined = ds_combined
+        return ds_combined
+
     def save_resampled_ds(self):
-        """
-        Saves the resampled xarray dataset to a netCDF file.
-        """
-        
-        basename = os.path.basename(self.amsr2_file).replace('.h5', '_resampled.nc')
-        output_path = os.path.join(self.output_dir, basename)
+        """Runs resample() if needed, then writes the result to output_dir."""
+        if self.ds_combined is None:
+            self.resample()
 
-        # Load AMSR2 swath with satpy
-        amsr2_scn = satpy.Scene(reader='amsr2_l1b', filenames=[self.amsr2_file])
-        amsr2_scn.load(self.chs)
-        amsr2_resampled = xr.merge(self.resample_amsr2(amsr2_scn[ch], self.beam_widths) for ch in self.chs)
+        os.makedirs(self.output_dir, exist_ok=True)
+        base = os.path.splitext(os.path.basename(self.amsr2_file))[0]
+        final_path = os.path.join(self.output_dir, f"{base}_resampled.nc")
+        tmp_path   = os.path.join(self.output_dir, f".{base}_resampled.nc.tmp")
 
-        amsr2_89_scn = self.get_combined_89(amsr2_scn)
-        amsr2_89_resampled = xr.merge(self.resample_amsr2(amsr2_89_scn[ch], self.combined_89_beam_widths) for ch in self.combined_89_chs)
-        ds_combined = xr.merge([amsr2_resampled, amsr2_89_resampled])
+        encoding = {
+            v: {"least_significant_digit": 2, "zlib": True, "complevel": 6}
+            for v in self.ds_combined.data_vars if 'btemp' in v
+        }
+        self.ds_combined.to_netcdf(path=tmp_path, encoding=encoding)
+        self.ds_combined.close()
 
-        ds_combined = self.set_attrs(ds_combined)
-
-        ds_combined = ds_combined.drop(['btemp_89.0ah', 'btemp_89.0av', 'btemp_89.0bh', 'btemp_89.0bv'])
-
-        ds_combined.to_netcdf(path=output_path, encoding=self.get_encodings(ds_combined))
-        ds_combined.close()
-
-
-
+        os.replace(tmp_path, final_path)  # atomic on the same filesystem
+ 
+        LOG.info(f"Saved: {final_path}")
+        return final_path
 
         
 

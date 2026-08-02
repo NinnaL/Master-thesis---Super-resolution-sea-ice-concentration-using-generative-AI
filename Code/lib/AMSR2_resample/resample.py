@@ -20,18 +20,19 @@ from pyresample.geometry import SwathDefinition
 from datetime import datetime, timedelta
 import pandas as pd
 
-os.environ['HDF5_USE_FILE_LOCKING']='FALSE'
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 from AMSR2Resampler import AMSR2Resampler
 from grid_config import target_area
 
-data_dir = Path('/dmidata/projects/asip-cms/amsr2/2022/10/13/')
-output_dir = Path('/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/Data/for_suman')
+data_dir = Path('/dmidata/projects/asip-cms/amsr2/2020')
+# output_dir = Path('/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/Data/for_suman')
+output_dir = Path('/dmidata/projects/asip-cms/ninna_msc/AMSR2')
 output_dir.mkdir(parents=True, exist_ok=True)
 
 amsr2_files = sorted(data_dir.glob('*.h5'))
 print(f"Found {len(amsr2_files)} files")
 
-for amsr2_file in amsr2_files[6:9]:  
+for amsr2_file in amsr2_files:  
     print(f"Processing: {amsr2_file.name}")
     t0 = time.time()
     try:

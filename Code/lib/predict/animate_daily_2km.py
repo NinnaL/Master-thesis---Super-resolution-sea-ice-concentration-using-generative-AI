@@ -129,7 +129,7 @@ def plot_day(DATE_dt):
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=mcolors.Normalize(vmin=0, vmax=100))
     sm.set_array([])
     fig.colorbar(sm, ax=ax, fraction=0.035, pad=0.05, label='SIC (%)', shrink=0.7)
-    ax.set_title(f'FusionNetASPP — {DATE}  ({n_plotted} scenes)', fontsize=12)
+    ax.set_title(f'{DATE}', fontsize=12)
     fig.tight_layout()
 
     fig.savefig(out_png, dpi=DPI, bbox_inches='tight', pad_inches=0.1)
