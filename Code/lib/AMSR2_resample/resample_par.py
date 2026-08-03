@@ -2,8 +2,8 @@
 Resamples AMSR2 L1B swaths onto a fixed 2 km polar-stereographic grid
 for a date range, in parallel. Skips files already processed.
 
-Usage: python resample_interval.py <start_date> <end_date> [--workers N]
-Example: python resample_interval.py 2020-01-01 2020-01-31
+Usage: python resample_par.py <start_date> <end_date> [--workers N]
+Example: python resample_par.py 2020-01-01 2020-01-31
 """
 
 import os

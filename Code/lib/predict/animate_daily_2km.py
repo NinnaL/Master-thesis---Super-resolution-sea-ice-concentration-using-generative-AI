@@ -35,8 +35,9 @@ import imageio.v2 as imageio
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SIC_BASE   = '/home/nili/ninna_msc_output'
-FRAME_DIR  = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/anim_frames'
-OUT_DIR    = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI'
+# FRAME_DIR  = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/anim_frames'
+FRAME_DIR  = '/dmidata/projects/asip-cms/ninna_msc/output_full'
+OUT_DIR    = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/figures/presentation'
 SHP_PATH   = '/dmidata/users/nili/Master/Master-thesis---Super-resolution-sea-ice-concentration-using-generative-AI/Code/lib/predict/arctic_shp/op_str_maps_circum_polar_40_EPSG3411.shp'
 FPS        = 8
 DPI        = 100
@@ -54,88 +55,88 @@ def date_range(start_date, end_date):
         current += timedelta(days=1)
 
 
-def plot_day(DATE_dt):
-    """Plot one day's worth of 2km scenes and save as a PNG frame."""
-    DATE     = DATE_dt.strftime('%Y/%m/%d')
-    y, m, d  = DATE.split('/')
-    out_png  = os.path.join(FRAME_DIR, f'frame_{y}{m}{d}.png')
+# def plot_day(DATE_dt):
+#     """Plot one day's worth of 2km scenes and save as a PNG frame."""
+#     DATE     = DATE_dt.strftime('%Y/%m/%d')
+#     y, m, d  = DATE.split('/')
+#     out_png  = os.path.join(FRAME_DIR, f'frame_{y}{m}{d}.png')
 
-    if os.path.exists(out_png):
-        return out_png  # already rendered — skip
+#     if os.path.exists(out_png):
+#         return out_png  # already rendered — skip
 
-    sic_files = sorted(glob.glob(os.path.join(SIC_BASE, y, m, d, '*.nc')))
+#     sic_files = sorted(glob.glob(os.path.join(SIC_BASE, y, m, d, '*.nc')))
 
-    fig = plt.figure(figsize=(12, 12))
-    proj = NorthPolStere()
-    ax = fig.add_subplot(1, 1, 1, projection=proj)
-    ax.set_extent([-180, 180, 60, 90], crs=ccrs.PlateCarree())
-    ax.set_facecolor('black')
+#     fig = plt.figure(figsize=(12, 12))
+#     proj = NorthPolStere()
+#     ax = fig.add_subplot(1, 1, 1, projection=proj)
+#     ax.set_extent([-180, 180, 60, 90], crs=ccrs.PlateCarree())
+#     ax.set_facecolor('black')
 
-    n_plotted = 0
-    for sic_path in sic_files:
-        try:
-            ds     = xr.open_dataset(sic_path)
-            sic    = ds['SIC_pred'].values.astype(np.float32)
-            lats   = np.array(ds.attrs['gcp_lats'])
-            lons   = np.array(ds.attrs['gcp_lons'])
-            lines  = np.array(ds.attrs['gcp_lines'])
-            pixels = np.array(ds.attrs['gcp_pixels'])
-            ds.close()
+#     n_plotted = 0
+#     for sic_path in sic_files:
+#         try:
+#             ds     = xr.open_dataset(sic_path)
+#             sic    = ds['SIC_pred'].values.astype(np.float32)
+#             lats   = np.array(ds.attrs['gcp_lats'])
+#             lons   = np.array(ds.attrs['gcp_lons'])
+#             lines  = np.array(ds.attrs['gcp_lines'])
+#             pixels = np.array(ds.attrs['gcp_pixels'])
+#             ds.close()
 
-            grid_h, grid_w = sic.shape
-            n_lines  = len(np.unique(lines))
-            n_pixels = len(np.unique(pixels))
+#             grid_h, grid_w = sic.shape
+#             n_lines  = len(np.unique(lines))
+#             n_pixels = len(np.unique(pixels))
 
-            # Project GCP lon/lat → x/y in EPSG:3411 BEFORE interpolating
-            gcp_x, gcp_y = transformer.transform(
-                lons.reshape(n_lines, n_pixels),
-                lats.reshape(n_lines, n_pixels)
-            )
+#             # Project GCP lon/lat → x/y in EPSG:3411 BEFORE interpolating
+#             gcp_x, gcp_y = transformer.transform(
+#                 lons.reshape(n_lines, n_pixels),
+#                 lats.reshape(n_lines, n_pixels)
+#             )
 
-            x_interp = RectBivariateSpline(
-                lines.reshape(n_lines, n_pixels)[:, 0],
-                pixels.reshape(n_lines, n_pixels)[0, :],
-                gcp_x)
-            y_interp = RectBivariateSpline(
-                lines.reshape(n_lines, n_pixels)[:, 0],
-                pixels.reshape(n_lines, n_pixels)[0, :],
-                gcp_y)
+#             x_interp = RectBivariateSpline(
+#                 lines.reshape(n_lines, n_pixels)[:, 0],
+#                 pixels.reshape(n_lines, n_pixels)[0, :],
+#                 gcp_x)
+#             y_interp = RectBivariateSpline(
+#                 lines.reshape(n_lines, n_pixels)[:, 0],
+#                 pixels.reshape(n_lines, n_pixels)[0, :],
+#                 gcp_y)
 
-            row_coords = np.linspace(0, lines.max(), grid_h)
-            col_coords = np.linspace(0, pixels.max(), grid_w)
-            x_scene    = x_interp(row_coords, col_coords)
-            y_scene    = y_interp(row_coords, col_coords)
+#             row_coords = np.linspace(0, lines.max(), grid_h)
+#             col_coords = np.linspace(0, pixels.max(), grid_w)
+#             x_scene    = x_interp(row_coords, col_coords)
+#             y_scene    = y_interp(row_coords, col_coords)
 
-            sic_valid = sic.copy()
-            sic_valid[sic >= 254] = np.nan
+#             sic_valid = sic.copy()
+#             sic_valid[sic >= 254] = np.nan
 
-            ax.pcolormesh(x_scene, y_scene, sic_valid,
-                          transform=NorthPolStere(),
-                          cmap=cmap, vmin=0, vmax=100,
-                          shading='auto', zorder=4)
-            n_plotted += 1
+#             ax.pcolormesh(x_scene, y_scene, sic_valid,
+#                           transform=NorthPolStere(),
+#                           cmap=cmap, vmin=0, vmax=100,
+#                           shading='auto', zorder=4)
+#             n_plotted += 1
 
-        except Exception as e:
-            tqdm.write(f'  Error {os.path.basename(sic_path)}: {e}')
+#         except Exception as e:
+#             tqdm.write(f'  Error {os.path.basename(sic_path)}: {e}')
 
-    shp.plot(ax=ax, facecolor='#c8c8a0', edgecolor='gray',
-             linewidth=0.1, zorder=5)
+#     shp.plot(ax=ax, facecolor='#c8c8a0', edgecolor='gray',
+#              linewidth=0.1, zorder=5)
 
-    gl = ax.gridlines(draw_labels=True, linewidth=0.4, color='gray',
-                      alpha=0.5, linestyle='--')
-    gl.top_labels   = False
-    gl.right_labels = False
+#     gl = ax.gridlines(draw_labels=True, linewidth=0.4, color='gray',
+#                       alpha=0.5, linestyle='--')
+#     gl.top_labels   = False
+#     gl.right_labels = False
 
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=mcolors.Normalize(vmin=0, vmax=100))
-    sm.set_array([])
-    fig.colorbar(sm, ax=ax, fraction=0.035, pad=0.05, label='SIC (%)', shrink=0.7)
-    ax.set_title(f'{DATE}', fontsize=12)
-    fig.tight_layout()
+#     sm = plt.cm.ScalarMappable(cmap=cmap, norm=mcolors.Normalize(vmin=0, vmax=100))
+#     sm.set_array([])
+#     fig.colorbar(sm, ax=ax, fraction=0.035, pad=0.05, label='SIC (%)', shrink=0.7)
+#     ax.set_title(f'{DATE}', fontsize=12)
+#     fig.tight_layout()
 
-    fig.savefig(out_png, dpi=DPI, bbox_inches='tight', pad_inches=0.1)
-    plt.close(fig)
+#     fig.savefig(out_png, dpi=DPI, bbox_inches='tight', pad_inches=0.1)
+#     plt.close(fig)
 
-    return out_png
+#     return out_png
 
 
 def main():
@@ -154,13 +155,19 @@ def main():
     print(f'Rendering {len(dates)} daily frames ({start.date()} → {end.date()})...')
 
     frame_paths = []
+    # for d in tqdm(dates, desc='Frames'):
+    #     try:
+    #         path = plot_day(d)
+    #         frame_paths.append(path)
+    #     except Exception as e:
+    #         tqdm.write(f'Error on {d.date()}: {e}')
     for d in tqdm(dates, desc='Frames'):
         try:
-            path = plot_day(d)
-            frame_paths.append(path)
+            path = glob.glob(os.path.join(FRAME_DIR, f'SPICE_SIC_full_{d.year:04d}-{d.month:02d}-{d.day:02d}.png'))
+            frame_paths.append(path[0])
+        
         except Exception as e:
             tqdm.write(f'Error on {d.date()}: {e}')
-
     print(f'\nRendered {len(frame_paths)} frames. Assembling animation...')
 
     # ── Assemble GIF ──────────────────────────────────────────────────────────
